@@ -1042,6 +1042,15 @@ export default function YouTubeSegmentPlayer() {
     const firstItem = queue[0]
     if (firstItem.type === "segment" && firstItem.segment) {
       playSegment(firstItem.segment)
+    } else if (firstItem.type === "segment" && !firstItem.segment) {
+      // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
+      toast({
+        title: "재생 불가",
+        description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
+        variant: "destructive",
+      })
+      // 다음 아이템으로 넘어감
+      playNextInQueue()
     } else {
       playNextInQueue()
     }
@@ -1055,6 +1064,15 @@ export default function YouTubeSegmentPlayer() {
 
       if (nextItem.type === "segment" && nextItem.segment) {
         playSegment(nextItem.segment)
+      } else if (nextItem.type === "segment" && !nextItem.segment) {
+        // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
+        toast({
+          title: "재생 불가",
+          description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
+          variant: "destructive",
+        })
+        // 다음 아이템으로 넘어감
+        setTimeout(() => playNextInQueue(), 500)
       } else {
         setTimeout(() => playNextInQueue(), 3000) // 설명 블럭은 3초 표시
       }
@@ -1072,6 +1090,13 @@ export default function YouTubeSegmentPlayer() {
     if (item.type === "segment" && item.segment) {
       setCurrentQueueIndex(index)
       playSegment(item.segment)
+    } else if (item.type === "segment" && !item.segment) {
+      // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
+      toast({
+        title: "재생 불가",
+        description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
+        variant: "destructive",
+      })
     }
   }
 
