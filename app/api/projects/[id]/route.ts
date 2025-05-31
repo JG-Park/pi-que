@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase"
+import { QueueItem, Segment } from "@/lib/supabase"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -22,18 +23,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 
     console.log("프로젝트 조회 성공:", project.title)
 
-    // 구간들 조회
-    const { data: segments, error: segmentsError } = await supabase
-      .from("segments")
-      .select("*")
-      .eq("video_id", project.video_id || "")
-      .order("created_at", { ascending: true })
-
-    if (segmentsError) {
-      console.error("구간 조회 오류:", segmentsError)
-    }
-
-    // 큐 아이템들 조회
+    // 큐 아이템들 먼저 조회
     const { data: queueItems, error: queueError } = await supabase
       .from("queue_items")
       .select("*")
@@ -44,17 +34,70 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       console.error("큐 조회 오류:", queueError)
     }
 
+    // 큐 아이템의 세그먼트 ID 목록 추출
+    const segmentIds = queueItems
+      ?.filter((item: QueueItem) => item.segment_id)
+      .map((item: QueueItem) => item.segment_id) || []
+
+    // 세그먼트 조회 - 현재 비디오의 세그먼트와 큐에 있는 세그먼트 모두 조회
+    let segments: Segment[] = []
+    
+    if (project.video_id) {
+      // 현재 비디오의 세그먼트 조회
+      const { data: videoSegments, error: videoSegmentsError } = await supabase
+        .from("segments")
+        .select("*")
+        .eq("video_id", project.video_id)
+        .order("created_at", { ascending: true })
+      
+      if (videoSegmentsError) {
+        console.error("비디오 세그먼트 조회 오류:", videoSegmentsError)
+      } else {
+        segments = videoSegments || []
+      }
+    }
+
+    // 큐 아이템의 세그먼트가 있고, 아직 로드되지 않은 경우 추가 조회
+    if (segmentIds.length > 0) {
+      const { data: queueSegments, error: queueSegmentsError } = await supabase
+        .from("segments")
+        .select("*")
+        .in("id", segmentIds)
+      
+      if (queueSegmentsError) {
+        console.error("큐 세그먼트 조회 오류:", queueSegmentsError)
+      } else if (queueSegments) {
+        // 중복 제거를 위해 Map 사용
+        const segmentMap = new Map<string, Segment>()
+        
+        // 기존 세그먼트 추가
+        segments.forEach((segment: Segment) => {
+          segmentMap.set(segment.id, segment)
+        })
+        
+        // 큐 세그먼트 추가
+        queueSegments.forEach((segment: Segment) => {
+          if (!segmentMap.has(segment.id)) {
+            segmentMap.set(segment.id, segment)
+          }
+        })
+        
+        // Map에서 배열로 변환
+        segments = Array.from(segmentMap.values())
+      }
+    }
+
     // 구간 ID로 구간 정보 매핑
-    const segmentMap = new Map()
+    const segmentMap = new Map<string, Segment>()
     if (segments) {
-      segments.forEach((segment) => {
+      segments.forEach((segment: Segment) => {
         segmentMap.set(segment.id, segment)
       })
     }
 
     // 데이터 변환
     const formattedSegments =
-      segments?.map((segment) => ({
+      segments?.map((segment: Segment) => ({
         id: segment.id,
         videoId: segment.video_id,
         title: segment.title,
@@ -65,7 +108,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       })) || []
 
     const formattedQueue =
-      queueItems?.map((item) => {
+      queueItems?.map((item: QueueItem) => {
         const segment = item.segment_id ? segmentMap.get(item.segment_id) : null
         return {
           id: item.id.toString(),
