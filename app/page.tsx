@@ -102,7 +102,7 @@ declare global {
 export default function YouTubeSegmentPlayer() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { session, user } = useAuth()
+  const { session, user, loading } = useAuth()
   const { theme, setTheme } = useTheme()
 
   const [videoUrl, setVideoUrl] = useState("")
@@ -226,6 +226,9 @@ export default function YouTubeSegmentPlayer() {
 
   // URL에서 프로젝트 ID 확인 및 로드
   useEffect(() => {
+    // 로딩 중이면 대기
+    if (loading) return
+
     const projectId = searchParams.get("id")
     if (projectId) {
       loadProject(projectId)
@@ -233,7 +236,7 @@ export default function YouTubeSegmentPlayer() {
       // 새 프로젝트 자동 생성
       createNewProject()
     }
-  }, [searchParams])
+  }, [searchParams, loading])
 
   // URL 자동 로드 (디바운스 적용)
   const debouncedLoadVideo = useCallback(
@@ -284,27 +287,44 @@ export default function YouTubeSegmentPlayer() {
   const checkAccess = (project: any) => {
     if (!project) return false
 
+    console.log("접근 권한 확인:", {
+      projectId: project.id,
+      visibility: project.visibility,
+      ownerId: project.owner_id,
+      currentUserId: user?.id,
+      isLoggedIn: !!user,
+    })
+
     // 공개 프로젝트는 누구나 접근 가능
-    if (project.visibility === "public") return true
+    if (project.visibility === "public") {
+      console.log("공개 프로젝트 - 접근 허용")
+      return true
+    }
 
     // 링크 공유 프로젝트도 누구나 접근 가능
-    if (project.visibility === "link_only") return true
+    if (project.visibility === "link_only") {
+      console.log("링크 공유 프로젝트 - 접근 허용")
+      return true
+    }
 
     // 비공개 프로젝트는 로그인한 소유자만 접근 가능
     if (project.visibility === "private") {
       // 로그인하지 않은 경우
       if (!user) {
+        console.log("비공개 프로젝트 - 로그인 필요")
         setAccessError("이 프로젝트는 비공개 프로젝트입니다. 로그인이 필요합니다.")
         return false
       }
 
       // 로그인했지만 소유자가 아닌 경우
       if (user.id !== project.owner_id) {
+        console.log("비공개 프로젝트 - 소유자가 아님:", user.id, "vs", project.owner_id)
         setAccessError("이 프로젝트는 비공개 프로젝트입니다. 소유자만 접근할 수 있습니다.")
         return false
       }
 
       // 로그인한 소유자인 경우
+      console.log("비공개 프로젝트 - 소유자 접근 허용")
       return true
     }
 
@@ -372,6 +392,14 @@ export default function YouTubeSegmentPlayer() {
       if (data.success) {
         const project = data.project
 
+        console.log("프로젝트 로드됨:", {
+          id: project.id,
+          title: project.title,
+          visibility: project.visibility,
+          owner_id: project.owner_id,
+          currentUser: user?.id,
+        })
+
         // 접근 권한 확인
         if (!checkAccess(project)) {
           setHasAccess(false)
@@ -383,7 +411,7 @@ export default function YouTubeSegmentPlayer() {
         setProjectName(project.title)
         setProjectDescription(project.description || "")
         setProjectVisibility(project.visibility || "public")
-        setProjectOwnerId(project.owner_id)
+        setProjectOwnerId(project.owner_id) // 소유자 ID 설정
         setSegments(project.segments || [])
         setQueue(project.queue || [])
         setHasUnsavedChanges(false)
@@ -1441,6 +1469,20 @@ export default function YouTubeSegmentPlayer() {
       default:
         return "공개"
     }
+  }
+
+  // 로딩 중인 경우
+  if (loading) {
+    return (
+      <div className="container mx-auto p-6 max-w-7xl">
+        <div className="flex items-center justify-center h-96">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-6 h-6 animate-spin" />
+            <span>로딩 중...</span>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   // 접근 권한이 없는 경우

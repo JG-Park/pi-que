@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 })
     }
 
-    console.log("프로젝트 조회 성공:", project.title)
+    console.log("프로젝트 조회 성공:", project.title, "소유자:", project.owner_id, "공개범위:", project.visibility)
 
     // 해당 프로젝트의 구간들 조회 (순서대로)
     const { data: segments, error: segmentsError } = await supabase
@@ -93,6 +93,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       title: project.title,
       description: project.description,
       visibility: project.visibility,
+      owner_id: project.owner_id, // 소유자 ID 포함
       segments: formattedSegments,
       queue: formattedQueue,
       createdAt: project.created_at,
