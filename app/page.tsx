@@ -1,5 +1,7 @@
 "use client"
 
+import type React from "react"
+
 import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,6 +12,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Switch } from "@/components/ui/switch"
 import {
   Play,
   SkipForward,
@@ -46,6 +49,10 @@ import {
   Lock,
   Link,
   Database,
+  GripVertical,
+  Home,
+  Timer,
+  EyeOff,
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -53,6 +60,7 @@ import { UserProfile } from "@/components/user-profile"
 import { useAuth } from "@/contexts/auth-context"
 import { useTheme } from "next-themes"
 import { extractVideoId, isValidYouTubeUrl, debounce, formatDate, generateId } from "@/lib/utils"
+import { reorderArray } from "@/lib/drag-utils"
 
 interface Segment {
   id: string
@@ -94,7 +102,7 @@ declare global {
 export default function YouTubeSegmentPlayer() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { session } = useAuth()
+  const { session, user } = useAuth()
   const { theme, setTheme } = useTheme()
 
   const [videoUrl, setVideoUrl] = useState("")
@@ -128,9 +136,20 @@ export default function YouTubeSegmentPlayer() {
   const [isEditingProjectName, setIsEditingProjectName] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [projectVisibility, setProjectVisibility] = useState<"public" | "private" | "link_only">("public")
+  const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [isProjectCreated, setIsProjectCreated] = useState(false)
+
+  // 접근 권한 관련
+  const [hasAccess, setHasAccess] = useState(true)
+  const [accessError, setAccessError] = useState("")
+
+  // 자동 저장 관련
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState(false)
+  const [autoSaveInterval, setAutoSaveInterval] = useState(30) // 30초
+  const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null)
 
   // 접기/펼치기 상태
   const [isSegmentFormExpanded, setIsSegmentFormExpanded] = useState(true)
@@ -157,18 +176,43 @@ export default function YouTubeSegmentPlayer() {
   const [selectedSegments, setSelectedSegments] = useState<Set<string>>(new Set())
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
 
+  // 드래그 앤 드롭 관련
+  const [draggedItem, setDraggedItem] = useState<{ id: string; index: number; type: "segment" | "queue" } | null>(null)
+
   const [showScrollTop, setShowScrollTop] = useState(false)
 
   const playerRef = useRef<any>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const autoSaveRef = useRef<NodeJS.Timeout | null>(null)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const searchResultsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // 변경사항 감지
+  // 변경사항 감지 (프로젝트 생성 후에만)
   useEffect(() => {
-    setHasUnsavedChanges(true)
-  }, [segments, queue, projectName, projectDescription])
+    if (isProjectCreated) {
+      setHasUnsavedChanges(true)
+    }
+  }, [segments, queue, projectName, projectDescription, isProjectCreated])
+
+  // 자동 저장 타이머
+  useEffect(() => {
+    if (autoSaveEnabled && hasUnsavedChanges && session?.access_token && currentProjectId) {
+      if (autoSaveRef.current) {
+        clearTimeout(autoSaveRef.current)
+      }
+
+      autoSaveRef.current = setTimeout(() => {
+        saveProject(true) // 자동 저장 플래그
+      }, autoSaveInterval * 1000)
+    }
+
+    return () => {
+      if (autoSaveRef.current) {
+        clearTimeout(autoSaveRef.current)
+      }
+    }
+  }, [autoSaveEnabled, hasUnsavedChanges, autoSaveInterval, session, currentProjectId])
 
   // 스크롤 감지
   useEffect(() => {
@@ -236,12 +280,31 @@ export default function YouTubeSegmentPlayer() {
     }
   }, [searchQuery, showSearchDialog, debouncedGetSuggestions])
 
+  // 접근 권한 확인
+  const checkAccess = (project: any) => {
+    if (!project) return false
+
+    // 공개 프로젝트는 누구나 접근 가능
+    if (project.visibility === "public") return true
+
+    // 링크 공유 프로젝트도 누구나 접근 가능
+    if (project.visibility === "link_only") return true
+
+    // 비공개 프로젝트는 소유자만 접근 가능
+    if (project.visibility === "private") {
+      return user?.id === project.owner_id
+    }
+
+    return false
+  }
+
   // 새 프로젝트 생성
   const createNewProject = async () => {
     if (!session?.access_token) {
       // 로그인하지 않은 경우 기본 프로젝트 이름만 설정
       setProjectName("이름 없는 프로젝트(1)")
       setHasUnsavedChanges(false)
+      setIsProjectCreated(true)
       return
     }
 
@@ -262,7 +325,11 @@ export default function YouTubeSegmentPlayer() {
         setProjectName(data.project.title)
         setProjectDescription(data.project.description || "")
         setProjectVisibility(data.project.visibility)
+        setProjectOwnerId(user?.id || null)
         setHasUnsavedChanges(false)
+        setIsProjectCreated(true)
+        setLastSaveTime(new Date())
+
         // URL 업데이트
         router.push(`?id=${data.projectId}`, { scroll: false })
 
@@ -278,6 +345,7 @@ export default function YouTubeSegmentPlayer() {
       // 오류 시 기본 이름 설정
       setProjectName("이름 없는 프로젝트(1)")
       setHasUnsavedChanges(false)
+      setIsProjectCreated(true)
     }
   }
 
@@ -290,13 +358,25 @@ export default function YouTubeSegmentPlayer() {
 
       if (data.success) {
         const project = data.project
+
+        // 접근 권한 확인
+        if (!checkAccess(project)) {
+          setHasAccess(false)
+          setAccessError("이 프로젝트는 비공개 프로젝트입니다.")
+          setIsLoading(false)
+          return
+        }
+
         setCurrentProjectId(projectId)
         setProjectName(project.title)
         setProjectDescription(project.description || "")
         setProjectVisibility(project.visibility || "public")
+        setProjectOwnerId(project.owner_id)
         setSegments(project.segments || [])
         setQueue(project.queue || [])
         setHasUnsavedChanges(false)
+        setIsProjectCreated(true)
+        setHasAccess(true)
 
         // 첫 번째 구간의 비디오 정보로 플레이어 설정
         if (project.segments && project.segments.length > 0) {
@@ -334,13 +414,15 @@ export default function YouTubeSegmentPlayer() {
   }
 
   // 프로젝트 저장 (일괄 저장)
-  const saveProject = async () => {
+  const saveProject = async (isAutoSave = false) => {
     if (!session?.access_token) {
-      toast({
-        title: "로그인 필요",
-        description: "프로젝트를 저장하려면 로그인이 필요합니다.",
-        variant: "destructive",
-      })
+      if (!isAutoSave) {
+        toast({
+          title: "로그인 필요",
+          description: "프로젝트를 저장하려면 로그인이 필요합니다.",
+          variant: "destructive",
+        })
+      }
       return
     }
 
@@ -391,20 +473,26 @@ export default function YouTubeSegmentPlayer() {
         }
 
         setHasUnsavedChanges(false)
-        toast({
-          title: "저장 완료",
-          description: "프로젝트가 성공적으로 저장되었습니다.",
-        })
+        setLastSaveTime(new Date())
+
+        if (!isAutoSave) {
+          toast({
+            title: "저장 완료",
+            description: "프로젝트가 성공적으로 저장되었습니다.",
+          })
+        }
       } else {
         throw new Error(data.error || data.details)
       }
     } catch (error) {
       console.error("저장 오류:", error)
-      toast({
-        title: "저장 실패",
-        description: error instanceof Error ? error.message : "프로젝트를 저장하는 중 오류가 발생했습니다.",
-        variant: "destructive",
-      })
+      if (!isAutoSave) {
+        toast({
+          title: "저장 실패",
+          description: error instanceof Error ? error.message : "프로젝트를 저장하는 중 오류가 발생했습니다.",
+          variant: "destructive",
+        })
+      }
     } finally {
       setIsSaving(false)
     }
@@ -589,6 +677,7 @@ export default function YouTubeSegmentPlayer() {
       playerVars: {
         playsinline: 1,
         controls: 1,
+        autoplay: 0, // 자동 재생 비활성화
       },
       events: {
         onReady: async (event: any) => {
@@ -626,6 +715,33 @@ export default function YouTubeSegmentPlayer() {
         },
       },
     })
+  }
+
+  // 드래그 앤 드롭 핸들러
+  const handleDragStart = (e: React.DragEvent, id: string, index: number, type: "segment" | "queue") => {
+    setDraggedItem({ id, index, type })
+    e.dataTransfer.effectAllowed = "move"
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "move"
+  }
+
+  const handleDrop = (e: React.DragEvent, dropIndex: number, type: "segment" | "queue") => {
+    e.preventDefault()
+
+    if (!draggedItem || draggedItem.type !== type) return
+
+    if (type === "segment") {
+      const reorderedSegments = reorderArray(segments, draggedItem.index, dropIndex)
+      setSegments(reorderedSegments)
+    } else {
+      const reorderedQueue = reorderArray(queue, draggedItem.index, dropIndex)
+      setQueue(reorderedQueue)
+    }
+
+    setDraggedItem(null)
   }
 
   // 구간 선택 토글
@@ -740,6 +856,7 @@ export default function YouTubeSegmentPlayer() {
     setProjectName("")
     setProjectDescription("")
     setProjectVisibility("public")
+    setProjectOwnerId(null)
     setVideoUrl("")
     setCurrentVideoId("")
     setVideoDuration(0)
@@ -751,6 +868,10 @@ export default function YouTubeSegmentPlayer() {
     setSelectedSegments(new Set())
     setIsMultiSelectMode(false)
     setHasUnsavedChanges(false)
+    setIsProjectCreated(false)
+    setHasAccess(true)
+    setAccessError("")
+    setLastSaveTime(null)
     router.push("/", { scroll: false })
 
     if (playerRef.current) {
@@ -862,9 +983,10 @@ export default function YouTubeSegmentPlayer() {
       endTime: videoDuration ? secondsToTime(videoDuration) : "",
     })
 
-    // 플레이어를 시작점으로 이동
+    // 플레이어 자동 재생 방지 - seekTo만 수행하고 재생하지 않음
     if (playerRef.current) {
       playerRef.current.seekTo(0)
+      // playVideo() 호출 제거
     }
 
     toast({
@@ -1308,6 +1430,32 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
+  // 접근 권한이 없는 경우
+  if (!hasAccess) {
+    return (
+      <div className="container mx-auto p-6 max-w-4xl">
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <div className="flex justify-center mb-4">
+                <EyeOff className="w-12 h-12 text-muted-foreground" />
+              </div>
+              <CardTitle className="text-xl">접근 제한</CardTitle>
+              <CardDescription>{accessError}</CardDescription>
+            </CardHeader>
+            <CardContent className="text-center space-y-4">
+              <p className="text-sm text-muted-foreground">이 프로젝트는 소유자만 접근할 수 있습니다.</p>
+              <Button onClick={() => router.push("/")} className="w-full">
+                <Home className="w-4 h-4 mr-2" />
+                메인 화면으로 돌아가기
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return (
       <div className="container mx-auto p-6 max-w-7xl">
@@ -1320,6 +1468,9 @@ export default function YouTubeSegmentPlayer() {
       </div>
     )
   }
+
+  // 재생 큐 탭에서는 편집 UI 숨기기
+  const showEditingUI = activeTab !== "queue"
 
   return (
     <div className="container mx-auto p-6 max-w-7xl pb-32">
@@ -1351,84 +1502,88 @@ export default function YouTubeSegmentPlayer() {
               </Button>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="flex gap-3">
-                <Input
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  value={videoUrl}
-                  onChange={(e) => setVideoUrl(e.target.value)}
-                  className="flex-1"
-                />
-                <Button onClick={() => setShowSearchDialog(true)} variant="outline">
-                  <Youtube className="w-4 h-4 mr-2" />
-                  YouTube에서 찾기
-                </Button>
-              </div>
+              {showEditingUI && (
+                <div className="flex gap-3">
+                  <Input
+                    placeholder="https://www.youtube.com/watch?v=..."
+                    value={videoUrl}
+                    onChange={(e) => setVideoUrl(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button onClick={() => setShowSearchDialog(true)} variant="outline">
+                    <Youtube className="w-4 h-4 mr-2" />
+                    YouTube에서 찾기
+                  </Button>
+                </div>
+              )}
 
               <div id="youtube-player" className="w-full aspect-video bg-muted rounded-lg"></div>
 
               {/* 정밀 시간 이동 컨트롤 */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4" />
-                  <span className="text-sm font-medium">정밀 시간 이동</span>
-                </div>
-
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="outline" onClick={() => seekBy(-10)} className="text-xs">
-                      -10초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(-5)} className="text-xs">
-                      -5초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(-1)} className="text-xs">
-                      -1초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(-0.1)} className="text-xs">
-                      -0.1초
-                    </Button>
+              {showEditingUI && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4" />
+                    <span className="text-sm font-medium">정밀 시간 이동</span>
                   </div>
-                  <div className="flex gap-1">
-                    <Button size="sm" variant="outline" onClick={() => seekBy(0.1)} className="text-xs">
-                      +0.1초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(1)} className="text-xs">
-                      +1초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(5)} className="text-xs">
-                      +5초
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => seekBy(10)} className="text-xs">
-                      +10초
-                    </Button>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => seekBy(-10)} className="text-xs">
+                        -10초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(-5)} className="text-xs">
+                        -5초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(-1)} className="text-xs">
+                        -1초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(-0.1)} className="text-xs">
+                        -0.1초
+                      </Button>
+                    </div>
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="outline" onClick={() => seekBy(0.1)} className="text-xs">
+                        +0.1초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(1)} className="text-xs">
+                        +1초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(5)} className="text-xs">
+                        +5초
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => seekBy(10)} className="text-xs">
+                        +10초
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
+                    <Target className="w-4 h-4 text-muted-foreground" />
+                    <Label htmlFor="seek-time" className="text-sm font-medium">
+                      특정 시간으로 이동:
+                    </Label>
+                    <Input
+                      id="seek-time"
+                      placeholder="mm:ss"
+                      className="w-24"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          const timeStr = (e.target as HTMLInputElement).value
+                          const seconds = timeToSeconds(timeStr)
+                          seekToTime(seconds)
+                          ;(e.target as HTMLInputElement).value = ""
+                        }
+                      }}
+                    />
+                    <span className="text-xs text-muted-foreground">Enter</span>
                   </div>
                 </div>
-
-                <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                  <Target className="w-4 h-4 text-muted-foreground" />
-                  <Label htmlFor="seek-time" className="text-sm font-medium">
-                    특정 시간으로 이동:
-                  </Label>
-                  <Input
-                    id="seek-time"
-                    placeholder="mm:ss"
-                    className="w-24"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        const timeStr = (e.target as HTMLInputElement).value
-                        const seconds = timeToSeconds(timeStr)
-                        seekToTime(seconds)
-                        ;(e.target as HTMLInputElement).value = ""
-                      }
-                    }}
-                  />
-                  <span className="text-xs text-muted-foreground">Enter</span>
-                </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
-          {!isPlayerMaximized && (
+          {!isPlayerMaximized && showEditingUI && (
             <>
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
@@ -1611,20 +1766,29 @@ export default function YouTubeSegmentPlayer() {
                   <div
                     className={`space-y-3 overflow-y-auto ${isPlayerMaximized ? "max-h-[calc(100vh-300px)]" : "max-h-[700px]"}`}
                   >
-                    {segments.map((segment) => (
+                    {segments.map((segment, index) => (
                       <div
                         key={segment.id}
+                        draggable={!isMultiSelectMode}
+                        onDragStart={(e) => handleDragStart(e, segment.id, index, "segment")}
+                        onDragOver={handleDragOver}
+                        onDrop={(e) => handleDrop(e, index, "segment")}
                         className={`border rounded-lg p-4 space-y-3 transition-colors ${
                           isMultiSelectMode
                             ? selectedSegments.has(segment.id)
                               ? "bg-primary/10 border-primary"
                               : "hover:bg-muted/50 cursor-pointer"
-                            : "hover:bg-muted/50"
+                            : "hover:bg-muted/50 cursor-move"
                         }`}
                         onClick={() => isMultiSelectMode && toggleSegmentSelection(segment.id)}
                       >
                         <div className="flex items-start justify-between">
                           <div className="flex items-start gap-3 flex-1 min-w-0">
+                            {!isMultiSelectMode && (
+                              <div className="mt-1 cursor-move">
+                                <GripVertical className="w-4 h-4 text-muted-foreground" />
+                              </div>
+                            )}
                             {isMultiSelectMode && (
                               <div className="mt-1">
                                 <input
@@ -1721,12 +1885,19 @@ export default function YouTubeSegmentPlayer() {
                     {queue.map((item, index) => (
                       <div
                         key={item.id}
-                        className={`border rounded-lg p-4 transition-all cursor-pointer ${
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, item.id, index, "queue")}
+                        onDragOver={handleDragOver}
+                        onDrop={(e) => handleDrop(e, index, "queue")}
+                        className={`border rounded-lg p-4 transition-all cursor-move ${
                           index === currentQueueIndex ? "bg-primary/10 border-primary shadow-md" : "hover:bg-muted/50"
                         }`}
                         onClick={() => item.type === "segment" && item.segment && playQueueItem(index)}
                       >
                         <div className="flex items-start gap-3">
+                          <div className="mt-1">
+                            <GripVertical className="w-4 h-4 text-muted-foreground" />
+                          </div>
                           <Badge
                             variant={index === currentQueueIndex ? "default" : "secondary"}
                             className="mt-0.5 min-w-[2rem] justify-center"
@@ -1836,7 +2007,7 @@ export default function YouTubeSegmentPlayer() {
                   </Button>
 
                   {/* 공개범위 설정 드롭다운 */}
-                  {currentProjectId && session?.access_token && (
+                  {currentProjectId && session?.access_token && user?.id === projectOwnerId && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button size="sm" variant="ghost" className="flex items-center gap-1">
@@ -1872,15 +2043,31 @@ export default function YouTubeSegmentPlayer() {
                   저장되지 않음
                 </Badge>
               )}
+              {lastSaveTime && (
+                <Badge variant="outline" className="text-xs">
+                  <Timer className="w-3 h-3 mr-1" />
+                  {lastSaveTime.toLocaleTimeString()}
+                </Badge>
+              )}
             </div>
 
             <div className="flex items-center gap-3">
+              {/* 자동 저장 설정 */}
+              {session?.access_token && (
+                <div className="flex items-center gap-2">
+                  <Switch checked={autoSaveEnabled} onCheckedChange={setAutoSaveEnabled} id="auto-save" />
+                  <Label htmlFor="auto-save" className="text-sm">
+                    자동 저장 ({autoSaveInterval}초)
+                  </Label>
+                </div>
+              )}
+
               <UserProfile />
               <Button onClick={startNewProject} variant="outline">
                 새 프로젝트
               </Button>
 
-              <Button onClick={saveProject} disabled={isSaving || !hasUnsavedChanges} className="relative">
+              <Button onClick={() => saveProject(false)} disabled={isSaving || !hasUnsavedChanges} className="relative">
                 {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
                 저장
               </Button>
