@@ -310,6 +310,18 @@ export default function YouTubeSegmentPlayer() {
       return
     }
 
+    // 로그인하지 않은 경우 경고
+    if (!session?.access_token) {
+      if (!isAutoSave) {
+        toast({
+          title: "로그인 필요",
+          description: "프로젝트를 저장하려면 로그인이 필요합니다.",
+          variant: "destructive",
+        })
+      }
+      return
+    }
+
     setIsSaving(true)
     try {
       const projectData = {
@@ -322,9 +334,9 @@ export default function YouTubeSegmentPlayer() {
         queue,
       }
 
-      const headers: Record<string, string> = { "Content-Type": "application/json" }
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
       }
 
       let response
@@ -1046,13 +1058,18 @@ export default function YouTubeSegmentPlayer() {
       // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
       toast({
         title: "재생 불가",
-        description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
+        description: "이 구간에 대한 데이터를 찾을 수 없습니다. 다음 항목으로 넘어갑니다.",
         variant: "destructive",
       })
       // 다음 아이템으로 넘어감
       playNextInQueue()
     } else {
-      playNextInQueue()
+      // 설명 블럭인 경우
+      toast({
+        title: "설명 표시",
+        description: firstItem.description || "설명 블럭입니다.",
+      })
+      setTimeout(() => playNextInQueue(), 3000)
     }
   }
 
@@ -1068,12 +1085,17 @@ export default function YouTubeSegmentPlayer() {
         // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
         toast({
           title: "재생 불가",
-          description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
+          description: "이 구간에 대한 데이터를 찾을 수 없습니다. 다음 항목으로 넘어갑니다.",
           variant: "destructive",
         })
         // 다음 아이템으로 넘어감
-        setTimeout(() => playNextInQueue(), 500)
+        setTimeout(() => playNextInQueue(), 1000)
       } else {
+        // 설명 블럭인 경우
+        toast({
+          title: "설명 표시",
+          description: nextItem.description || "설명 블럭입니다.",
+        })
         setTimeout(() => playNextInQueue(), 3000) // 설명 블럭은 3초 표시
       }
     } else {
@@ -1096,6 +1118,12 @@ export default function YouTubeSegmentPlayer() {
         title: "재생 불가",
         description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
         variant: "destructive",
+      })
+    } else {
+      // 설명 블럭인 경우
+      toast({
+        title: "설명 표시",
+        description: item.description || "설명 블럭입니다.",
       })
     }
   }
@@ -1594,7 +1622,7 @@ export default function YouTubeSegmentPlayer() {
                         className={`border rounded-lg p-4 transition-all cursor-pointer ${
                           index === currentQueueIndex ? "bg-primary/10 border-primary shadow-md" : "hover:bg-muted/50"
                         }`}
-                        onClick={() => item.type === "segment" && playQueueItem(index)}
+                        onClick={() => item.type === "segment" && item.segment && playQueueItem(index)}
                       >
                         <div className="flex items-start gap-3">
                           <Badge
@@ -1619,7 +1647,19 @@ export default function YouTubeSegmentPlayer() {
                                   </div>
                                 )}
                               </>
+                            ) : item.type === "segment" && !item.segment ? (
+                              // 세그먼트 타입이지만 데이터가 없는 경우
+                              <div className="flex items-start gap-2">
+                                <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                                <div>
+                                  <div className="font-medium text-amber-600">구간 데이터 없음</div>
+                                  <div className="text-sm text-muted-foreground">
+                                    이 구간의 데이터를 찾을 수 없습니다.
+                                  </div>
+                                </div>
+                              </div>
                             ) : (
+                              // 설명 블럭인 경우
                               <div className="flex items-start gap-2">
                                 <MessageSquare className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                                 <div className="text-sm text-muted-foreground italic break-words">

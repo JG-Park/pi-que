@@ -60,3 +60,21 @@ export interface QueueItem {
   order_index: number
   created_at: string
 }
+
+// 클라이언트용 인터페이스 (프론트엔드에서 사용)
+export interface ClientSegment {
+  id: string
+  videoId: string
+  title: string
+  description: string
+  startTime: number
+  endTime: number
+  videoTitle?: string
+}
+
+export interface ClientQueueItem {
+  id: string
+  type: "segment" | "description"
+  segment?: ClientSegment
+  description?: string
+}
