@@ -1,6 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { createServerClient } from "@/lib/supabase"
-import { QueueItem, Segment } from "@/lib/supabase"
+import { createServerClient, type Segment, type QueueItem } from "@/lib/supabase"
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -35,21 +34,20 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     }
 
     // 큐 아이템의 세그먼트 ID 목록 추출
-    const segmentIds = queueItems
-      ?.filter((item: QueueItem) => item.segment_id)
-      .map((item: QueueItem) => item.segment_id) || []
+    const segmentIds =
+      queueItems?.filter((item: QueueItem) => item.segment_id).map((item: QueueItem) => item.segment_id!) || []
 
     // 세그먼트 조회 - 현재 비디오의 세그먼트와 큐에 있는 세그먼트 모두 조회
     let segments: Segment[] = []
-    
+
+    // 현재 비디오의 세그먼트 조회
     if (project.video_id) {
-      // 현재 비디오의 세그먼트 조회
       const { data: videoSegments, error: videoSegmentsError } = await supabase
         .from("segments")
         .select("*")
         .eq("video_id", project.video_id)
         .order("created_at", { ascending: true })
-      
+
       if (videoSegmentsError) {
         console.error("비디오 세그먼트 조회 오류:", videoSegmentsError)
       } else {
@@ -63,25 +61,25 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         .from("segments")
         .select("*")
         .in("id", segmentIds)
-      
+
       if (queueSegmentsError) {
         console.error("큐 세그먼트 조회 오류:", queueSegmentsError)
       } else if (queueSegments) {
         // 중복 제거를 위해 Map 사용
         const segmentMap = new Map<string, Segment>()
-        
+
         // 기존 세그먼트 추가
         segments.forEach((segment: Segment) => {
           segmentMap.set(segment.id, segment)
         })
-        
+
         // 큐 세그먼트 추가
         queueSegments.forEach((segment: Segment) => {
           if (!segmentMap.has(segment.id)) {
             segmentMap.set(segment.id, segment)
           }
         })
-        
+
         // Map에서 배열로 변환
         segments = Array.from(segmentMap.values())
       }
@@ -101,7 +99,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
         id: segment.id,
         videoId: segment.video_id,
         title: segment.title,
-        description: segment.description,
+        description: segment.description || "",
         startTime: segment.start_time,
         endTime: segment.end_time,
         videoTitle: segment.video_title,
@@ -118,13 +116,13 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
                 id: segment.id,
                 videoId: segment.video_id,
                 title: segment.title,
-                description: segment.description,
+                description: segment.description || "",
                 startTime: segment.start_time,
                 endTime: segment.end_time,
                 videoTitle: segment.video_title,
               }
             : undefined,
-          description: item.description_text,
+          description: item.description_text || "",
         }
       }) || []
 
@@ -141,7 +139,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       updatedAt: project.updated_at,
     }
 
-    console.log("프로젝트 데이터 변환 완료")
+    console.log("프로젝트 데이터 변환 완료 - 세그먼트:", formattedSegments.length, "큐:", formattedQueue.length)
 
     return NextResponse.json({ success: true, project: formattedProject })
   } catch (error) {
