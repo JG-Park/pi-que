@@ -290,9 +290,22 @@ export default function YouTubeSegmentPlayer() {
     // 링크 공유 프로젝트도 누구나 접근 가능
     if (project.visibility === "link_only") return true
 
-    // 비공개 프로젝트는 소유자만 접근 가능
+    // 비공개 프로젝트는 로그인한 소유자만 접근 가능
     if (project.visibility === "private") {
-      return user?.id === project.owner_id
+      // 로그인하지 않은 경우
+      if (!user) {
+        setAccessError("이 프로젝트는 비공개 프로젝트입니다. 로그인이 필요합니다.")
+        return false
+      }
+
+      // 로그인했지만 소유자가 아닌 경우
+      if (user.id !== project.owner_id) {
+        setAccessError("이 프로젝트는 비공개 프로젝트입니다. 소유자만 접근할 수 있습니다.")
+        return false
+      }
+
+      // 로그인한 소유자인 경우
+      return true
     }
 
     return false
@@ -362,7 +375,6 @@ export default function YouTubeSegmentPlayer() {
         // 접근 권한 확인
         if (!checkAccess(project)) {
           setHasAccess(false)
-          setAccessError("이 프로젝트는 비공개 프로젝트입니다.")
           setIsLoading(false)
           return
         }
@@ -377,6 +389,7 @@ export default function YouTubeSegmentPlayer() {
         setHasUnsavedChanges(false)
         setIsProjectCreated(true)
         setHasAccess(true)
+        setAccessError("")
 
         // 첫 번째 구간의 비디오 정보로 플레이어 설정
         if (project.segments && project.segments.length > 0) {
@@ -1444,8 +1457,15 @@ export default function YouTubeSegmentPlayer() {
               <CardDescription>{accessError}</CardDescription>
             </CardHeader>
             <CardContent className="text-center space-y-4">
-              <p className="text-sm text-muted-foreground">이 프로젝트는 소유자만 접근할 수 있습니다.</p>
-              <Button onClick={() => router.push("/")} className="w-full">
+              {!user ? (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">로그인하여 프로젝트에 접근하세요.</p>
+                  <UserProfile />
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">이 프로젝트에 대한 접근 권한이 없습니다.</p>
+              )}
+              <Button onClick={() => router.push("/")} className="w-full" variant="outline">
                 <Home className="w-4 h-4 mr-2" />
                 메인 화면으로 돌아가기
               </Button>
