@@ -45,6 +45,7 @@ import {
   Globe,
   Lock,
   Link,
+  Database,
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -55,12 +56,13 @@ import { extractVideoId, isValidYouTubeUrl, debounce, formatDate, generateId } f
 
 interface Segment {
   id: string
-  videoId: string
   title: string
   description: string
+  videoId: string
+  videoTitle?: string
   startTime: number
   endTime: number
-  videoTitle?: string
+  orderIndex: number
 }
 
 interface QueueItem {
@@ -68,7 +70,7 @@ interface QueueItem {
   type: "segment" | "description"
   segment?: Segment
   description?: string
-  dbId?: number // DB의 실제 ID
+  orderIndex: number
 }
 
 interface YouTubeVideo {
@@ -122,11 +124,13 @@ export default function YouTubeSegmentPlayer() {
 
   // 프로젝트 관련 상태
   const [projectName, setProjectName] = useState("")
+  const [projectDescription, setProjectDescription] = useState("")
   const [isEditingProjectName, setIsEditingProjectName] = useState(false)
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
   const [projectVisibility, setProjectVisibility] = useState<"public" | "private" | "link_only">("public")
   const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
 
   // 접기/펼치기 상태
   const [isSegmentFormExpanded, setIsSegmentFormExpanded] = useState(true)
@@ -161,6 +165,11 @@ export default function YouTubeSegmentPlayer() {
   const searchResultsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // 변경사항 감지
+  useEffect(() => {
+    setHasUnsavedChanges(true)
+  }, [segments, queue, projectName, projectDescription])
+
   // 스크롤 감지
   useEffect(() => {
     const handleScroll = () => {
@@ -181,45 +190,6 @@ export default function YouTubeSegmentPlayer() {
       createNewProject()
     }
   }, [searchParams])
-
-  // 프로젝트 이름 변경 시 자동 저장 (디바운스)
-  const debouncedSaveProjectName = useCallback(
-    debounce(async (name: string) => {
-      if (currentProjectId && name && session?.access_token) {
-        try {
-          const response = await fetch("/api/projects", {
-            method: "PUT",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({
-              projectId: currentProjectId,
-              title: name,
-              videoUrl,
-              videoId: currentVideoId,
-              videoTitle,
-              videoDuration,
-            }),
-          })
-
-          const data = await response.json()
-          if (!data.success) {
-            console.error("프로젝트 이름 저장 실패:", data.error)
-          }
-        } catch (error) {
-          console.error("프로젝트 이름 저장 오류:", error)
-        }
-      }
-    }, 2000),
-    [currentProjectId, session, videoUrl, currentVideoId, videoTitle, videoDuration],
-  )
-
-  useEffect(() => {
-    if (projectName && currentProjectId) {
-      debouncedSaveProjectName(projectName)
-    }
-  }, [projectName, debouncedSaveProjectName])
 
   // URL 자동 로드 (디바운스 적용)
   const debouncedLoadVideo = useCallback(
@@ -271,6 +241,7 @@ export default function YouTubeSegmentPlayer() {
     if (!session?.access_token) {
       // 로그인하지 않은 경우 기본 프로젝트 이름만 설정
       setProjectName("이름 없는 프로젝트(1)")
+      setHasUnsavedChanges(false)
       return
     }
 
@@ -289,7 +260,9 @@ export default function YouTubeSegmentPlayer() {
       if (data.success) {
         setCurrentProjectId(data.projectId)
         setProjectName(data.project.title)
+        setProjectDescription(data.project.description || "")
         setProjectVisibility(data.project.visibility)
+        setHasUnsavedChanges(false)
         // URL 업데이트
         router.push(`?id=${data.projectId}`, { scroll: false })
 
@@ -304,6 +277,7 @@ export default function YouTubeSegmentPlayer() {
       console.error("프로젝트 생성 오류:", error)
       // 오류 시 기본 이름 설정
       setProjectName("이름 없는 프로젝트(1)")
+      setHasUnsavedChanges(false)
     }
   }
 
@@ -318,25 +292,22 @@ export default function YouTubeSegmentPlayer() {
         const project = data.project
         setCurrentProjectId(projectId)
         setProjectName(project.title)
+        setProjectDescription(project.description || "")
         setProjectVisibility(project.visibility || "public")
-        setVideoUrl(project.videoUrl || "")
-        setCurrentVideoId(project.videoId || "")
-        setVideoDuration(project.videoDuration || 0)
-        setVideoTitle(project.videoTitle || "")
         setSegments(project.segments || [])
+        setQueue(project.queue || [])
+        setHasUnsavedChanges(false)
 
-        // 큐 데이터 변환 (dbId 포함)
-        const formattedQueue = (project.queue || []).map((item: any) => ({
-          id: item.id,
-          type: item.type,
-          segment: item.segment,
-          description: item.description,
-          dbId: Number.parseInt(item.id), // DB의 실제 ID 저장
-        }))
-        setQueue(formattedQueue)
+        // 첫 번째 구간의 비디오 정보로 플레이어 설정
+        if (project.segments && project.segments.length > 0) {
+          const firstSegment = project.segments[0]
+          setVideoUrl(`https://www.youtube.com/watch?v=${firstSegment.videoId}`)
+          setCurrentVideoId(firstSegment.videoId)
+          setVideoTitle(firstSegment.videoTitle || "")
+        }
 
         // 큐에 데이터가 있으면 큐 탭을 활성화
-        if (formattedQueue.length > 0) {
+        if (project.queue && project.queue.length > 0) {
           setActiveTab("queue")
         }
 
@@ -359,6 +330,83 @@ export default function YouTubeSegmentPlayer() {
       })
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // 프로젝트 저장 (일괄 저장)
+  const saveProject = async () => {
+    if (!session?.access_token) {
+      toast({
+        title: "로그인 필요",
+        description: "프로젝트를 저장하려면 로그인이 필요합니다.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      const projectData = {
+        title: projectName || "이름 없는 프로젝트",
+        description: projectDescription,
+        segments: segments.map((segment, index) => ({
+          ...segment,
+          orderIndex: index,
+        })),
+        queue: queue.map((item, index) => ({
+          ...item,
+          orderIndex: index,
+        })),
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      }
+
+      let response
+      if (currentProjectId) {
+        // 기존 프로젝트 업데이트
+        response = await fetch("/api/projects", {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ projectId: currentProjectId, ...projectData }),
+        })
+      } else {
+        // 새 프로젝트 생성
+        response = await fetch("/api/projects", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(projectData),
+        })
+      }
+
+      const data = await response.json()
+
+      if (data.success) {
+        if (!currentProjectId) {
+          setCurrentProjectId(data.projectId)
+          // URL 업데이트
+          router.push(`?id=${data.projectId}`, { scroll: false })
+        }
+
+        setHasUnsavedChanges(false)
+        toast({
+          title: "저장 완료",
+          description: "프로젝트가 성공적으로 저장되었습니다.",
+        })
+      } else {
+        throw new Error(data.error || data.details)
+      }
+    } catch (error) {
+      console.error("저장 오류:", error)
+      toast({
+        title: "저장 실패",
+        description: error instanceof Error ? error.message : "프로젝트를 저장하는 중 오류가 발생했습니다.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -406,120 +454,6 @@ export default function YouTubeSegmentPlayer() {
         description: error instanceof Error ? error.message : "공개범위를 변경하는 중 오류가 발생했습니다.",
         variant: "destructive",
       })
-    }
-  }
-
-  // 구간을 DB에 실시간 저장
-  const saveSegmentToDB = async (segment: Segment) => {
-    if (!session?.access_token) {
-      return
-    }
-
-    try {
-      const response = await fetch("/api/segments", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          id: segment.id,
-          title: segment.title,
-          description: segment.description,
-          videoId: segment.videoId,
-          videoTitle: segment.videoTitle,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-        }),
-      })
-
-      const data = await response.json()
-      if (!data.success) {
-        console.error("구간 저장 실패:", data.error)
-      }
-    } catch (error) {
-      console.error("구간 저장 오류:", error)
-    }
-  }
-
-  // 큐 아이템을 DB에 실시간 저장
-  const saveQueueItemToDB = async (queueItem: QueueItem, orderIndex: number) => {
-    if (!session?.access_token || !currentProjectId) {
-      return null
-    }
-
-    try {
-      const response = await fetch("/api/queue", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          projectId: currentProjectId,
-          type: queueItem.type,
-          segmentId: queueItem.segment?.id,
-          description: queueItem.description,
-          orderIndex,
-        }),
-      })
-
-      const data = await response.json()
-      if (data.success) {
-        return data.queueItem.id
-      } else {
-        console.error("큐 아이템 저장 실패:", data.error)
-        return null
-      }
-    } catch (error) {
-      console.error("큐 아이템 저장 오류:", error)
-      return null
-    }
-  }
-
-  // 구간 삭제 (DB에서도 삭제)
-  const deleteSegmentFromDB = async (segmentId: string) => {
-    if (!session?.access_token) {
-      return
-    }
-
-    try {
-      const response = await fetch(`/api/segments?id=${segmentId}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      })
-
-      const data = await response.json()
-      if (!data.success) {
-        console.error("구간 삭제 실패:", data.error)
-      }
-    } catch (error) {
-      console.error("구간 삭제 오류:", error)
-    }
-  }
-
-  // 큐 아이템 삭제 (DB에서도 삭제)
-  const deleteQueueItemFromDB = async (dbId: number) => {
-    if (!session?.access_token) {
-      return
-    }
-
-    try {
-      const response = await fetch(`/api/queue?id=${dbId}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      })
-
-      const data = await response.json()
-      if (!data.success) {
-        console.error("큐 아이템 삭제 실패:", data.error)
-      }
-    } catch (error) {
-      console.error("큐 아이템 삭제 오류:", error)
     }
   }
 
@@ -572,7 +506,7 @@ export default function YouTubeSegmentPlayer() {
   }
 
   // 무한 스크롤 핸들러
-  const handleScroll = useCallback(() => {
+  const handleScrollSearch = useCallback(() => {
     if (!searchResultsRef.current || isSearching || !hasMoreResults) return
 
     const { scrollTop, scrollHeight, clientHeight } = searchResultsRef.current
@@ -715,24 +649,18 @@ export default function YouTubeSegmentPlayer() {
   }
 
   // 선택된 구간들을 큐에 추가
-  const addSelectedToQueue = async () => {
+  const addSelectedToQueue = () => {
     const selectedSegmentObjects = segments.filter((segment) => selectedSegments.has(segment.id))
 
-    for (const segment of selectedSegmentObjects) {
+    selectedSegmentObjects.forEach((segment) => {
       const queueItem: QueueItem = {
         id: generateId(),
         type: "segment",
         segment,
+        orderIndex: queue.length,
       }
-
-      // DB에 저장
-      const dbId = await saveQueueItemToDB(queueItem, queue.length)
-      if (dbId) {
-        queueItem.dbId = dbId
-      }
-
       setQueue((prev) => [...prev, queueItem])
-    }
+    })
 
     setSelectedSegments(new Set())
     setIsMultiSelectMode(false)
@@ -810,6 +738,7 @@ export default function YouTubeSegmentPlayer() {
   const startNewProject = () => {
     setCurrentProjectId(null)
     setProjectName("")
+    setProjectDescription("")
     setProjectVisibility("public")
     setVideoUrl("")
     setCurrentVideoId("")
@@ -821,6 +750,7 @@ export default function YouTubeSegmentPlayer() {
     setActiveTab("segments")
     setSelectedSegments(new Set())
     setIsMultiSelectMode(false)
+    setHasUnsavedChanges(false)
     router.push("/", { scroll: false })
 
     if (playerRef.current) {
@@ -877,7 +807,7 @@ export default function YouTubeSegmentPlayer() {
     return null
   }
 
-  const addSegment = async () => {
+  const addSegment = () => {
     if (!newSegment.title.trim()) {
       toast({
         title: "오류",
@@ -912,19 +842,17 @@ export default function YouTubeSegmentPlayer() {
 
     const segment: Segment = {
       id: generateId(),
-      videoId: currentVideoId,
       title: newSegment.title,
       description: newSegment.description,
+      videoId: currentVideoId,
+      videoTitle,
       startTime: startSeconds,
       endTime: endSeconds,
-      videoTitle,
+      orderIndex: segments.length,
     }
 
     // 로컬 상태 업데이트
     setSegments((prev) => [...prev, segment])
-
-    // DB에 실시간 저장
-    await saveSegmentToDB(segment)
 
     // 구간 추가 후 초기화
     setNewSegment({
@@ -955,7 +883,7 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  const saveEditSegment = async () => {
+  const saveEditSegment = () => {
     if (!editingSegment) return
 
     if (!editForm.title.trim()) {
@@ -994,33 +922,6 @@ export default function YouTubeSegmentPlayer() {
         item.type === "segment" && item.segment?.id === editingSegment.id ? { ...item, segment: updatedSegment } : item,
       ),
     )
-
-    // DB에 저장
-    if (session?.access_token) {
-      try {
-        const response = await fetch("/api/segments", {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            id: updatedSegment.id,
-            title: updatedSegment.title,
-            description: updatedSegment.description,
-            startTime: updatedSegment.startTime,
-            endTime: updatedSegment.endTime,
-          }),
-        })
-
-        const data = await response.json()
-        if (!data.success) {
-          console.error("구간 수정 저장 실패:", data.error)
-        }
-      } catch (error) {
-        console.error("구간 수정 저장 오류:", error)
-      }
-    }
 
     setEditingSegment(null)
     toast({
@@ -1072,17 +973,12 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  const addToQueue = async (segment: Segment) => {
+  const addToQueue = (segment: Segment) => {
     const queueItem: QueueItem = {
       id: generateId(),
       type: "segment",
       segment,
-    }
-
-    // DB에 저장
-    const dbId = await saveQueueItemToDB(queueItem, queue.length)
-    if (dbId) {
-      queueItem.dbId = dbId
+      orderIndex: queue.length,
     }
 
     setQueue((prev) => [...prev, queueItem])
@@ -1094,7 +990,7 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  const addDescriptionToQueue = async () => {
+  const addDescriptionToQueue = () => {
     if (!newDescription.trim()) {
       toast({
         title: "오류",
@@ -1108,12 +1004,7 @@ export default function YouTubeSegmentPlayer() {
       id: generateId(),
       type: "description",
       description: newDescription,
-    }
-
-    // DB에 저장
-    const dbId = await saveQueueItemToDB(queueItem, queue.length)
-    if (dbId) {
-      queueItem.dbId = dbId
+      orderIndex: queue.length,
     }
 
     setQueue((prev) => [...prev, queueItem])
@@ -1126,18 +1017,11 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  const removeFromQueue = async (queueItemId: string) => {
-    const queueItem = queue.find((item) => item.id === queueItemId)
-    if (queueItem?.dbId) {
-      await deleteQueueItemFromDB(queueItem.dbId)
-    }
+  const removeFromQueue = (queueItemId: string) => {
     setQueue((prev) => prev.filter((item) => item.id !== queueItemId))
   }
 
-  const removeSegment = async (segmentId: string) => {
-    // DB에서 삭제
-    await deleteSegmentFromDB(segmentId)
-
+  const removeSegment = (segmentId: string) => {
     // 로컬 상태에서 삭제
     setSegments((prev) => prev.filter((seg) => seg.id !== segmentId))
     // 큐에서도 제거
@@ -1983,12 +1867,22 @@ export default function YouTubeSegmentPlayer() {
                   ID: {currentProjectId.slice(0, 8)}...
                 </Badge>
               )}
+              {hasUnsavedChanges && (
+                <Badge variant="destructive" className="text-xs">
+                  저장되지 않음
+                </Badge>
+              )}
             </div>
 
             <div className="flex items-center gap-3">
               <UserProfile />
               <Button onClick={startNewProject} variant="outline">
                 새 프로젝트
+              </Button>
+
+              <Button onClick={saveProject} disabled={isSaving || !hasUnsavedChanges} className="relative">
+                {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+                저장
               </Button>
 
               <Button onClick={shareCurrentState} variant="outline" disabled={!currentProjectId}>
@@ -2106,7 +2000,7 @@ export default function YouTubeSegmentPlayer() {
             <div
               ref={searchResultsRef}
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto"
-              onScroll={handleScroll}
+              onScroll={handleScrollSearch}
             >
               {searchResults.map((video) => (
                 <div

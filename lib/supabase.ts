@@ -23,36 +23,34 @@ export function createServerClient() {
   })
 }
 
-// 타입 정의 (새로운 DB 스키마에 맞춤)
+// 새로운 DB 스키마에 맞춘 타입 정의
 export interface Project {
   id: string
   title: string
   description?: string
-  video_url?: string
-  video_id?: string
-  video_title?: string
-  video_duration: number
   visibility: "public" | "private" | "link_only"
-  owner_id: string // UUID 타입
+  owner_id: string
   created_at: string
   updated_at: string
 }
 
 export interface Segment {
   id: string
+  project_id: string
   title: string
   description?: string
   video_id: string
   video_title?: string
   start_time: number
   end_time: number
-  owner_id: string // UUID 타입
+  order_index: number
+  owner_id: string
   created_at: string
   updated_at: string
 }
 
 export interface QueueItem {
-  id: number // SERIAL 타입
+  id: number
   project_id: string
   item_type: "segment" | "description"
   segment_id?: string
@@ -64,12 +62,13 @@ export interface QueueItem {
 // 클라이언트용 인터페이스 (프론트엔드에서 사용)
 export interface ClientSegment {
   id: string
-  videoId: string
   title: string
   description: string
+  videoId: string
+  videoTitle?: string
   startTime: number
   endTime: number
-  videoTitle?: string
+  orderIndex: number
 }
 
 export interface ClientQueueItem {
@@ -77,4 +76,5 @@ export interface ClientQueueItem {
   type: "segment" | "description"
   segment?: ClientSegment
   description?: string
+  orderIndex: number
 }
