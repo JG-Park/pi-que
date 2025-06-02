@@ -4,7 +4,6 @@ import { generateId } from "@/lib/utils"
 
 // 기본 프로젝트 이름 생성 함수
 async function generateDefaultProjectName(supabase: any, userId: string): Promise<string> {
-  // 사용자의 기존 프로젝트 수 조회
   const { data: projects, error } = await supabase
     .from("projects")
     .select("title")
@@ -17,7 +16,6 @@ async function generateDefaultProjectName(supabase: any, userId: string): Promis
     return "이름 없는 프로젝트(1)"
   }
 
-  // 기존 프로젝트 이름에서 번호 추출
   const existingNumbers = projects
     .map((project: any) => {
       const match = project.title.match(/이름 없는 프로젝트$$(\d+)$$/)
@@ -25,9 +23,7 @@ async function generateDefaultProjectName(supabase: any, userId: string): Promis
     })
     .filter((num: number) => num > 0)
 
-  // 다음 번호 계산
   const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1
-
   return `이름 없는 프로젝트(${nextNumber})`
 }
 
@@ -56,25 +52,19 @@ export async function POST(request: NextRequest) {
     const userId = user.id
     const projectId = generateId()
 
-    console.log("프로젝트 생성 시작 - 사용자:", user.email, "ID:", userId)
+    console.log("프로젝트 생성 시작 - 사용자:", user.email)
 
     // 기본 프로젝트 이름 생성
     const defaultTitle = await generateDefaultProjectName(supabase, userId)
 
-    // 프로젝트 생성
+    // 프로젝트 생성 (메타데이터만)
     const projectData = {
       id: projectId,
       title: data.title || defaultTitle,
       description: data.description || null,
-      video_url: data.videoUrl || null,
-      video_id: data.videoId || null,
-      video_title: data.videoTitle || null,
-      video_duration: data.videoDuration || 0,
       visibility: "public",
       owner_id: userId,
     }
-
-    console.log("프로젝트 데이터:", projectData)
 
     const { data: project, error: projectError } = await supabase.from("projects").insert(projectData).select().single()
 
@@ -91,6 +81,49 @@ export async function POST(request: NextRequest) {
     }
 
     console.log("프로젝트 생성 성공:", project.id)
+
+    // 구간들이 있으면 저장
+    if (data.segments && data.segments.length > 0) {
+      const segmentsToInsert = data.segments.map((segment: any, index: number) => ({
+        id: segment.id,
+        project_id: projectId,
+        title: segment.title,
+        description: segment.description || null,
+        video_id: segment.videoId,
+        video_title: segment.videoTitle || null,
+        start_time: segment.startTime,
+        end_time: segment.endTime,
+        order_index: segment.orderIndex || index,
+        owner_id: userId,
+      }))
+
+      const { error: segmentsError } = await supabase.from("segments").insert(segmentsToInsert)
+
+      if (segmentsError) {
+        console.error("구간 저장 오류:", segmentsError)
+      } else {
+        console.log("구간 저장 성공:", segmentsToInsert.length, "개")
+      }
+    }
+
+    // 큐 아이템들이 있으면 저장
+    if (data.queue && data.queue.length > 0) {
+      const queueItemsToInsert = data.queue.map((item: any) => ({
+        project_id: projectId,
+        item_type: item.type,
+        segment_id: item.segment?.id || null,
+        description_text: item.description || null,
+        order_index: item.orderIndex,
+      }))
+
+      const { error: queueError } = await supabase.from("queue_items").insert(queueItemsToInsert)
+
+      if (queueError) {
+        console.error("큐 저장 오류:", queueError)
+      } else {
+        console.log("큐 저장 성공:", queueItemsToInsert.length, "개")
+      }
+    }
 
     return NextResponse.json({ success: true, projectId, project })
   } catch (error) {
@@ -133,16 +166,12 @@ export async function PUT(request: NextRequest) {
 
     console.log("프로젝트 업데이트 시작 - 사용자:", user.email, "프로젝트:", projectId)
 
-    // 프로젝트 소유자 확인 및 업데이트
+    // 프로젝트 메타데이터 업데이트
     const { data: project, error: projectError } = await supabase
       .from("projects")
       .update({
         title: updateData.title,
         description: updateData.description || null,
-        video_url: updateData.videoUrl || null,
-        video_id: updateData.videoId || null,
-        video_title: updateData.videoTitle || null,
-        video_duration: updateData.videoDuration || 0,
       })
       .eq("id", projectId)
       .eq("owner_id", userId)
@@ -165,7 +194,46 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: false, error: "Project not found or access denied" }, { status: 404 })
     }
 
-    console.log("프로젝트 업데이트 성공")
+    // 기존 구간들과 큐 아이템들 삭제
+    await supabase.from("segments").delete().eq("project_id", projectId).eq("owner_id", userId)
+    await supabase.from("queue_items").delete().eq("project_id", projectId)
+
+    // 새 구간들 저장
+    if (updateData.segments && updateData.segments.length > 0) {
+      const segmentsToInsert = updateData.segments.map((segment: any, index: number) => ({
+        id: segment.id,
+        project_id: projectId,
+        title: segment.title,
+        description: segment.description || null,
+        video_id: segment.videoId,
+        video_title: segment.videoTitle || null,
+        start_time: segment.startTime,
+        end_time: segment.endTime,
+        order_index: segment.orderIndex || index,
+        owner_id: userId,
+      }))
+
+      const { error: segmentsError } = await supabase.from("segments").insert(segmentsToInsert)
+      if (segmentsError) {
+        console.error("구간 업데이트 오류:", segmentsError)
+      }
+    }
+
+    // 새 큐 아이템들 저장
+    if (updateData.queue && updateData.queue.length > 0) {
+      const queueItemsToInsert = updateData.queue.map((item: any) => ({
+        project_id: projectId,
+        item_type: item.type,
+        segment_id: item.segment?.id || null,
+        description_text: item.description || null,
+        order_index: item.orderIndex,
+      }))
+
+      const { error: queueError } = await supabase.from("queue_items").insert(queueItemsToInsert)
+      if (queueError) {
+        console.error("큐 업데이트 오류:", queueError)
+      }
+    }
 
     return NextResponse.json({ success: true, project })
   } catch (error) {
