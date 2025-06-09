@@ -187,6 +187,7 @@ export default function YouTubeSegmentPlayer() {
   const titleInputRef = useRef<HTMLInputElement>(null)
   const searchResultsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const youtubeAPILoadedRef = useRef(false)
 
   // 변경사항 감지 (프로젝트 생성 후에만)
   useEffect(() => {
@@ -787,21 +788,42 @@ export default function YouTubeSegmentPlayer() {
 
   // 구간 선택 토글
   const toggleSegmentSelection = (segmentId: string) => {
-    const newSelected = new Set(selectedSegments)
-    if (newSelected.has(segmentId)) {
-      newSelected.delete(segmentId)
-    } else {
-      newSelected.add(segmentId)
+    try {
+      // 해당 ID의 구간이 실제로 존재하는지 확인
+      const segmentExists = segments.some((segment) => segment.id === segmentId)
+      if (!segmentExists) {
+        console.warn(`구간 ID ${segmentId}가 존재하지 않습니다.`)
+        return
+      }
+
+      const newSelected = new Set(selectedSegments)
+      if (newSelected.has(segmentId)) {
+        newSelected.delete(segmentId)
+      } else {
+        newSelected.add(segmentId)
+      }
+      setSelectedSegments(newSelected)
+    } catch (error) {
+      console.error("구간 선택 토글 중 오류 발생:", error)
+      // 오류 발생 시 선택 상태 초기화
+      setSelectedSegments(new Set())
     }
-    setSelectedSegments(newSelected)
   }
 
   // 모든 구간 선택/해제
   const toggleAllSegments = () => {
-    if (selectedSegments.size === segments.length) {
+    try {
+      if (selectedSegments.size === segments.length) {
+        setSelectedSegments(new Set())
+      } else {
+        // 유효한 ID만 포함하도록 확인
+        const validSegmentIds = segments.map((s) => s.id).filter(Boolean)
+        setSelectedSegments(new Set(validSegmentIds))
+      }
+    } catch (error) {
+      console.error("전체 구간 선택 토글 중 오류 발생:", error)
+      // 오류 발생 시 선택 상태 초기화
       setSelectedSegments(new Set())
-    } else {
-      setSelectedSegments(new Set(segments.map((s) => s.id)))
     }
   }
 
@@ -809,24 +831,38 @@ export default function YouTubeSegmentPlayer() {
   const addSelectedToQueue = () => {
     const selectedSegmentObjects = segments.filter((segment) => selectedSegments.has(segment.id))
 
-    selectedSegmentObjects.forEach((segment) => {
-      const queueItem: QueueItem = {
-        id: generateId(),
-        type: "segment",
-        segment,
-        orderIndex: queue.length,
-      }
-      setQueue((prev) => [...prev, queueItem])
-    })
+    if (selectedSegmentObjects.length === 0) {
+      toast({
+        title: "선택된 구간 없음",
+        description: "큐에 추가할 구간을 선택해주세요.",
+        variant: "destructive",
+      })
+      return
+    }
 
+    // 큐에 추가
+    const newQueueItems = selectedSegmentObjects.map((segment) => ({
+      id: generateId(),
+      type: "segment" as const,
+      segment,
+      orderIndex: queue.length + selectedSegmentObjects.indexOf(segment),
+    }))
+
+    setQueue((prev) => [...prev, ...newQueueItems])
+
+    // 상태 초기화
     setSelectedSegments(new Set())
     setIsMultiSelectMode(false)
-    setActiveTab("queue")
 
-    toast({
-      title: "큐에 추가됨",
-      description: `${selectedSegmentObjects.length}개 구간이 큐에 추가되었습니다.`,
-    })
+    // 탭 전환을 다음 렌더 사이클에서 실행
+    setTimeout(() => {
+      setActiveTab("queue")
+
+      toast({
+        title: "큐에 추가됨",
+        description: `${selectedSegmentObjects.length}개 구간이 큐에 추가되었습니다.`,
+      })
+    }, 0)
   }
 
   // 큐에 데이터가 있고 비디오 ID가 있으면 자동으로 비디오 로드
@@ -839,21 +875,68 @@ export default function YouTubeSegmentPlayer() {
     }
   }, [queue, currentVideoId])
 
-  // YouTube API 로드
+  // YouTube API 로드 - 더 안전한 방법
   useEffect(() => {
-    if (window.YT && window.YT.Player) {
-      setIsYouTubeAPIReady(true)
+    // 이미 로드되었거나 로드 중인 경우 스킵
+    if (youtubeAPILoadedRef.current || isYouTubeAPIReady) {
       return
     }
 
-    const tag = document.createElement("script")
-    tag.src = "https://www.youtube.com/iframe_api"
-    const firstScriptTag = document.getElementsByTagName("script")[0]
-    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag)
-
-    window.onYouTubeIframeAPIReady = () => {
-      console.log("YouTube API ready")
+    // 이미 API가 로드되어 있는 경우
+    if (window.YT && window.YT.Player) {
       setIsYouTubeAPIReady(true)
+      youtubeAPILoadedRef.current = true
+      return
+    }
+
+    // 이미 스크립트가 추가되어 있는지 확인
+    const existingScript = document.querySelector('script[src*="youtube.com/iframe_api"]')
+    if (existingScript) {
+      // 스크립트는 있지만 API가 아직 로드되지 않은 경우
+      window.onYouTubeIframeAPIReady = () => {
+        console.log("YouTube API ready")
+        setIsYouTubeAPIReady(true)
+        youtubeAPILoadedRef.current = true
+      }
+      return
+    }
+
+    // 스크립트 로드 시작 플래그 설정
+    youtubeAPILoadedRef.current = true
+
+    try {
+      // 새 스크립트 요소 생성
+      const script = document.createElement("script")
+      script.src = "https://www.youtube.com/iframe_api"
+      script.async = true
+
+      // 로드 완료 이벤트 핸들러
+      script.onload = () => {
+        console.log("YouTube script loaded")
+      }
+
+      script.onerror = (error) => {
+        console.error("YouTube script load error:", error)
+        youtubeAPILoadedRef.current = false
+      }
+
+      // API 로드 완료 콜백
+      window.onYouTubeIframeAPIReady = () => {
+        console.log("YouTube API ready")
+        setIsYouTubeAPIReady(true)
+      }
+
+      // DOM에 안전하게 추가
+      const firstScript = document.getElementsByTagName("script")[0]
+      if (firstScript && firstScript.parentNode) {
+        firstScript.parentNode.insertBefore(script, firstScript)
+      } else {
+        // fallback: head에 직접 추가
+        document.head.appendChild(script)
+      }
+    } catch (error) {
+      console.error("YouTube API 로드 오류:", error)
+      youtubeAPILoadedRef.current = false
     }
   }, [])
 
@@ -1773,7 +1856,18 @@ export default function YouTubeSegmentPlayer() {
 
         {/* 오른쪽: 구간 목록 및 재생 큐 (탭으로 전환) */}
         <div className="space-y-6">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => {
+              // 상태 초기화를 먼저 수행
+              if (value !== activeTab) {
+                setIsMultiSelectMode(false)
+                setSelectedSegments(new Set())
+                setActiveTab(value)
+              }
+            }}
+            className="w-full"
+          >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="segments" className="flex items-center gap-2">
                 <MessageSquare className="w-4 h-4" />
@@ -1816,7 +1910,15 @@ export default function YouTubeSegmentPlayer() {
                         </>
                       )}
                       {!isMultiSelectMode && segments.length > 0 && (
-                        <Button size="sm" variant="outline" onClick={() => setIsMultiSelectMode(true)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            // 선택 상태 초기화 후 다중 선택 모드 활성화
+                            setSelectedSegments(new Set())
+                            setIsMultiSelectMode(true)
+                          }}
+                        >
                           <PlusCircle className="w-4 h-4 mr-2" />
                           다중 선택
                         </Button>
