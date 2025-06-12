@@ -1,43 +1,25 @@
 "use client"
 
-import type React from "react"
-
 import { useState, useEffect, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
 import {
   Play,
   SkipForward,
-  Trash2,
-  Plus,
   Share2,
   MessageSquare,
-  SkipBack,
-  SkipForwardIcon as SkipToEnd,
   Edit,
   Save,
   X,
-  Clock,
-  Target,
   AlertTriangle,
-  ChevronDown,
-  ChevronUp,
-  Maximize2,
-  Minimize2,
   Search,
   Loader2,
-  PlayCircle,
-  PlusCircle,
-  ListPlus,
-  CheckCircle,
   Youtube,
   Calendar,
   User,
@@ -49,10 +31,12 @@ import {
   Lock,
   Link,
   Database,
-  GripVertical,
   Home,
   Timer,
   EyeOff,
+  CheckCircle,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
@@ -60,105 +44,72 @@ import { UserProfile } from "@/components/user-profile"
 import { useAuth } from "@/contexts/auth-context"
 import { useTheme } from "next-themes"
 import { extractVideoId, isValidYouTubeUrl, debounce, formatDate, generateId } from "@/lib/utils"
-import { reorderArray } from "@/lib/drag-utils"
+import { useYouTubeAPI } from "@/hooks/use-youtube-api"
+import { useYouTubePlayer } from "@/hooks/use-youtube-player"
+import { useProject } from "@/hooks/use-project"
+import { YouTubePlayer } from "@/components/youtube-player"
+import { SegmentForm } from "@/components/segment-form"
+import { SegmentsTab } from "@/components/segments-tab"
+import { secondsToTime, timeToSeconds, validateTimeRange } from "@/utils/time"
+import type { Segment, QueueItem, YouTubeVideo } from "@/types"
 
-interface Segment {
-  id: string
-  title: string
-  description: string
-  videoId: string
-  videoTitle?: string
-  startTime: number
-  endTime: number
-  orderIndex: number
-}
-
-interface QueueItem {
-  id: string
-  type: "segment" | "description"
-  segment?: Segment
-  description?: string
-  orderIndex: number
-}
-
-interface YouTubeVideo {
-  id: string
-  title: string
-  thumbnail: string
-  duration: string
-  channelTitle: string
-  publishedAt: string
-  description?: string
-  viewCount?: string
-}
-
-declare global {
-  interface Window {
-    YT: any
-    onYouTubeIframeAPIReady: () => void
-  }
-}
-
-export default function YouTubeSegmentPlayer() {
+export default function YouTubeSegmentPlayerPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { session, user, loading } = useAuth()
   const { theme, setTheme } = useTheme()
 
+  // YouTube API 및 플레이어
+  const { isReady: isYouTubeAPIReady, isLoading: isAPILoading, error: apiError } = useYouTubeAPI()
+
+  // 프로젝트 관리
+  const {
+    currentProjectId,
+    projectName,
+    projectDescription,
+    projectVisibility,
+    projectOwnerId,
+    segments,
+    queue,
+    hasUnsavedChanges,
+    isProjectCreated,
+    isSaving,
+    lastSaveTime,
+    setProjectName,
+    setProjectDescription,
+    setProjectVisibility,
+    createNewProject,
+    loadProject,
+    saveProject,
+    resetProject,
+    addSegment,
+    updateSegment,
+    removeSegment,
+    addToQueue,
+    removeFromQueue,
+    reorderSegments,
+    reorderQueue,
+  } = useProject()
+
+  // 상태
   const [videoUrl, setVideoUrl] = useState("")
-  const [currentVideoId, setCurrentVideoId] = useState("")
   const [videoDuration, setVideoDuration] = useState(0)
   const [videoTitle, setVideoTitle] = useState("")
-  const [segments, setSegments] = useState<Segment[]>([])
-  const [queue, setQueue] = useState<QueueItem[]>([])
-  const [currentQueueIndex, setCurrentQueueIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [newSegment, setNewSegment] = useState({
-    title: "",
-    description: "",
-    startTime: "0:00",
-    endTime: "",
-  })
-  const [newDescription, setNewDescription] = useState("")
-  const [isYouTubeAPIReady, setIsYouTubeAPIReady] = useState(false)
-  const [editingSegment, setEditingSegment] = useState<Segment | null>(null)
-  const [editForm, setEditForm] = useState({
-    title: "",
-    description: "",
-    startTime: "",
-    endTime: "",
-  })
+  const [currentQueueIndex, setCurrentQueueIndex] = useState(0)
   const [activeTab, setActiveTab] = useState("segments")
-
-  // 프로젝트 관련 상태
-  const [projectName, setProjectName] = useState("")
-  const [projectDescription, setProjectDescription] = useState("")
   const [isEditingProjectName, setIsEditingProjectName] = useState(false)
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null)
-  const [projectVisibility, setProjectVisibility] = useState<"public" | "private" | "link_only">("public")
-  const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null)
-  const [isSaving, setIsSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
-  const [isProjectCreated, setIsProjectCreated] = useState(false)
-
-  // 접근 권한 관련
   const [hasAccess, setHasAccess] = useState(true)
   const [accessError, setAccessError] = useState("")
-
-  // 자동 저장 관련
   const [autoSaveEnabled, setAutoSaveEnabled] = useState(false)
-  const [autoSaveInterval, setAutoSaveInterval] = useState(30) // 30초
-  const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null)
-
-  // 접기/펼치기 상태
+  const [autoSaveInterval] = useState(30)
   const [isSegmentFormExpanded, setIsSegmentFormExpanded] = useState(true)
   const [isDescriptionFormExpanded, setIsDescriptionFormExpanded] = useState(false)
-
-  // 플레이어 최대화 상태
   const [isPlayerMaximized, setIsPlayerMaximized] = useState(false)
+  const [showScrollTop, setShowScrollTop] = useState(false)
 
-  // YouTube 검색 관련 상태
+  // 검색 관련
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<YouTubeVideo[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -168,35 +119,84 @@ export default function YouTubeSegmentPlayer() {
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
 
-  // 영상 로드 확인 모달
+  // 모달
   const [showVideoLoadConfirm, setShowVideoLoadConfirm] = useState(false)
   const [pendingVideo, setPendingVideo] = useState<YouTubeVideo | null>(null)
+  const [editingSegment, setEditingSegment] = useState<Segment | null>(null)
+  const [editForm, setEditForm] = useState({
+    title: "",
+    description: "",
+    startTime: "",
+    endTime: "",
+  })
+  const [newDescription, setNewDescription] = useState("")
 
-  // 재생큐 추가 관련
-  const [selectedSegments, setSelectedSegments] = useState<Set<string>>(new Set())
-  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false)
-
-  // 드래그 앤 드롭 관련
-  const [draggedItem, setDraggedItem] = useState<{ id: string; index: number; type: "segment" | "queue" } | null>(null)
-
-  const [showScrollTop, setShowScrollTop] = useState(false)
-
-  const playerRef = useRef<any>(null)
+  // Refs
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const autoSaveRef = useRef<NodeJS.Timeout | null>(null)
-  const titleInputRef = useRef<HTMLInputElement>(null)
   const searchResultsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const youtubeAPILoadedRef = useRef(false)
+  const tabChangeRef = useRef(false)
 
-  // 변경사항 감지 (프로젝트 생성 후에만)
+  // YouTube 플레이어 - 탭 변경 감지 추가
+  const {
+    currentVideoId,
+    isPlayerReady,
+    isInitializing,
+    loadVideo,
+    seekTo,
+    getCurrentTime,
+    playVideo,
+    pauseVideo,
+    setVolume,
+    destroyPlayer,
+  } = useYouTubePlayer({
+    isAPIReady: isYouTubeAPIReady,
+    onVideoReady: (duration, title) => {
+      setVideoDuration(duration)
+      setVideoTitle(title)
+    },
+    onStateChange: (playing) => {
+      setIsPlaying(playing)
+    },
+  })
+
+  // 탭 변경 시 플레이어 안전 처리
+  useEffect(() => {
+    if (tabChangeRef.current) {
+      // 탭 변경 후 잠시 대기
+      const timer = setTimeout(() => {
+        tabChangeRef.current = false
+      }, 500)
+
+      return () => clearTimeout(timer)
+    }
+  }, [activeTab])
+
+  // 탭 변경 핸들러
+  const handleTabChange = useCallback(
+    (newTab: string) => {
+      if (newTab !== activeTab) {
+        tabChangeRef.current = true
+        setActiveTab(newTab)
+
+        // 큐 탭으로 변경 시 플레이어 상태 확인
+        if (newTab === "queue" && !isPlayerReady && currentVideoId) {
+          console.log("큐 탭 활성화 - 플레이어 상태 확인 중...")
+        }
+      }
+    },
+    [activeTab, isPlayerReady, currentVideoId],
+  )
+
+  // 변경사항 감지
   useEffect(() => {
     if (isProjectCreated) {
-      setHasUnsavedChanges(true)
+      // 프로젝트가 생성된 후에만 변경사항 추적
     }
   }, [segments, queue, projectName, projectDescription, isProjectCreated])
 
-  // 자동 저장 타이머
+  // 자동 저장
   useEffect(() => {
     if (autoSaveEnabled && hasUnsavedChanges && session?.access_token && currentProjectId) {
       if (autoSaveRef.current) {
@@ -204,7 +204,7 @@ export default function YouTubeSegmentPlayer() {
       }
 
       autoSaveRef.current = setTimeout(() => {
-        saveProject(true) // 자동 저장 플래그
+        saveProject(true)
       }, autoSaveInterval * 1000)
     }
 
@@ -213,7 +213,7 @@ export default function YouTubeSegmentPlayer() {
         clearTimeout(autoSaveRef.current)
       }
     }
-  }, [autoSaveEnabled, hasUnsavedChanges, autoSaveInterval, session, currentProjectId])
+  }, [autoSaveEnabled, hasUnsavedChanges, autoSaveInterval, session, currentProjectId, saveProject])
 
   // 스크롤 감지
   useEffect(() => {
@@ -225,38 +225,39 @@ export default function YouTubeSegmentPlayer() {
     return () => window.removeEventListener("scroll", handleScroll)
   }, [])
 
-  // URL에서 프로젝트 ID 확인 및 로드
+  // 프로젝트 초기화
   useEffect(() => {
-    // 로딩 중이면 대기
     if (loading) return
 
     const projectId = searchParams.get("id")
     if (projectId) {
-      loadProject(projectId)
+      handleLoadProject(projectId)
     } else {
-      // 새 프로젝트 자동 생성
-      createNewProject()
+      handleCreateNewProject()
     }
   }, [searchParams, loading])
 
-  // URL 자동 로드 (디바운스 적용)
+  // URL 자동 로드 - 탭 변경 중이 아닐 때만
   const debouncedLoadVideo = useCallback(
     debounce((url: string) => {
-      if (isValidYouTubeUrl(url)) {
-        loadVideoFromUrl(url)
+      if (isValidYouTubeUrl(url) && !tabChangeRef.current) {
+        const videoId = extractVideoId(url)
+        if (videoId) {
+          console.log("URL에서 비디오 로드:", videoId)
+          loadVideo(videoId)
+        }
       }
     }, 1000),
-    [isYouTubeAPIReady],
+    [loadVideo],
   )
 
-  // URL 변경 감지 및 자동 로드
   useEffect(() => {
-    if (videoUrl && isYouTubeAPIReady) {
+    if (videoUrl && isYouTubeAPIReady && !tabChangeRef.current) {
       debouncedLoadVideo(videoUrl)
     }
-  }, [videoUrl, debouncedLoadVideo])
+  }, [videoUrl, debouncedLoadVideo, isYouTubeAPIReady])
 
-  // 검색 제안 가져오기
+  // 검색 제안
   const debouncedGetSuggestions = useCallback(
     debounce(async (query: string) => {
       if (query.length < 2) {
@@ -277,146 +278,109 @@ export default function YouTubeSegmentPlayer() {
     [],
   )
 
-  // 검색어 변경 시 제안 가져오기
   useEffect(() => {
     if (showSearchDialog && searchQuery) {
       debouncedGetSuggestions(searchQuery)
     }
   }, [searchQuery, showSearchDialog, debouncedGetSuggestions])
 
+  // 큐 재생 모니터링 - 탭 변경 중이 아닐 때만
+  useEffect(() => {
+    if (isPlaying && queue.length > 0 && isPlayerReady && !tabChangeRef.current) {
+      intervalRef.current = setInterval(() => {
+        const currentItem = queue[currentQueueIndex]
+        if (currentItem?.type === "segment" && currentItem.segment) {
+          const currentTime = getCurrentTime()
+          const fadeOutDuration = 3
+
+          if (currentTime >= currentItem.segment.endTime - fadeOutDuration) {
+            fadeOutAndNext()
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current)
+              intervalRef.current = null
+            }
+          }
+        }
+      }, 1000)
+    } else {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+      }
+    }
+  }, [isPlaying, currentQueueIndex, queue, isPlayerReady, getCurrentTime])
+
+  // API 오류 처리
+  useEffect(() => {
+    if (apiError) {
+      toast({
+        title: "YouTube API 오류",
+        description: apiError,
+        variant: "destructive",
+      })
+    }
+  }, [apiError])
+
+  // 컴포넌트 언마운트 시 정리
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+      }
+      if (autoSaveRef.current) {
+        clearTimeout(autoSaveRef.current)
+      }
+    }
+  }, [])
+
   // 접근 권한 확인
   const checkAccess = (project: any) => {
     if (!project) return false
 
-    console.log("접근 권한 확인:", {
-      projectId: project.id,
-      visibility: project.visibility,
-      ownerId: project.owner_id,
-      currentUserId: user?.id,
-      isLoggedIn: !!user,
-    })
-
-    // 공개 프로젝트는 누구나 접근 가능
-    if (project.visibility === "public") {
-      console.log("공개 프로젝트 - 접근 허용")
+    if (project.visibility === "public" || project.visibility === "link_only") {
       return true
     }
 
-    // 링크 공유 프로젝트도 누구나 접근 가능
-    if (project.visibility === "link_only") {
-      console.log("링크 공유 프로젝트 - 접근 허용")
-      return true
-    }
-
-    // 비공개 프로젝트는 로그인한 소유자만 접근 가능
     if (project.visibility === "private") {
-      // 로그인하지 않은 경우
       if (!user) {
-        console.log("비공개 프로젝트 - 로그인 필요")
         setAccessError("이 프로젝트는 비공개 프로젝트입니다. 로그인이 필요합니다.")
         return false
       }
 
-      // 로그인했지만 소유자가 아닌 경우
       if (user.id !== project.owner_id) {
-        console.log("비공개 프로젝트 - 소유자가 아님:", user.id, "vs", project.owner_id)
         setAccessError("이 프로젝트는 비공개 프로젝트입니다. 소유자만 접근할 수 있습니다.")
         return false
       }
-
-      // 로그인한 소유자인 경우
-      console.log("비공개 프로젝트 - 소유자 접근 허용")
-      return true
     }
 
-    return false
+    return true
   }
 
-  // 새 프로젝트 생성
-  const createNewProject = async () => {
-    if (!session?.access_token) {
-      // 로그인하지 않은 경우 기본 프로젝트 이름만 설정
-      setProjectName("이름 없는 프로젝트(1)")
-      setHasUnsavedChanges(false)
-      setIsProjectCreated(true)
-      return
-    }
-
-    try {
-      const response = await fetch("/api/projects", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({}),
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        setCurrentProjectId(data.projectId)
-        setProjectName(data.project.title)
-        setProjectDescription(data.project.description || "")
-        setProjectVisibility(data.project.visibility)
-        setProjectOwnerId(user?.id || null)
-        setHasUnsavedChanges(false)
-        setIsProjectCreated(true)
-        setLastSaveTime(new Date())
-
-        // URL 업데이트
-        router.push(`?id=${data.projectId}`, { scroll: false })
-
-        toast({
-          title: "새 프로젝트 생성됨",
-          description: `"${data.project.title}" 프로젝트가 생성되었습니다.`,
-        })
-      } else {
-        throw new Error(data.error || data.details)
-      }
-    } catch (error) {
-      console.error("프로젝트 생성 오류:", error)
-      // 오류 시 기본 이름 설정
-      setProjectName("이름 없는 프로젝트(1)")
-      setHasUnsavedChanges(false)
-      setIsProjectCreated(true)
+  // 프로젝트 생성
+  const handleCreateNewProject = async () => {
+    const projectId = await createNewProject()
+    if (projectId) {
+      router.push(`?id=${projectId}`, { scroll: false })
     }
   }
 
   // 프로젝트 로드
-  const loadProject = async (projectId: string) => {
+  const handleLoadProject = async (projectId: string) => {
     setIsLoading(true)
     try {
-      const response = await fetch(`/api/projects/${projectId}`)
-      const data = await response.json()
-
-      if (data.success) {
-        const project = data.project
-
-        console.log("프로젝트 로드됨:", {
-          id: project.id,
-          title: project.title,
-          visibility: project.visibility,
-          owner_id: project.owner_id,
-          currentUser: user?.id,
-        })
-
-        // 접근 권한 확인
+      const project = await loadProject(projectId)
+      if (project) {
         if (!checkAccess(project)) {
           setHasAccess(false)
-          setIsLoading(false)
           return
         }
 
-        setCurrentProjectId(projectId)
-        setProjectName(project.title)
-        setProjectDescription(project.description || "")
-        setProjectVisibility(project.visibility || "public")
-        setProjectOwnerId(project.owner_id) // 소유자 ID 설정
-        setSegments(project.segments || [])
-        setQueue(project.queue || [])
-        setHasUnsavedChanges(false)
-        setIsProjectCreated(true)
         setHasAccess(true)
         setAccessError("")
 
@@ -424,119 +388,15 @@ export default function YouTubeSegmentPlayer() {
         if (project.segments && project.segments.length > 0) {
           const firstSegment = project.segments[0]
           setVideoUrl(`https://www.youtube.com/watch?v=${firstSegment.videoId}`)
-          setCurrentVideoId(firstSegment.videoId)
-          setVideoTitle(firstSegment.videoTitle || "")
         }
 
         // 큐에 데이터가 있으면 큐 탭을 활성화
         if (project.queue && project.queue.length > 0) {
-          setActiveTab("queue")
+          handleTabChange("queue")
         }
-
-        toast({
-          title: "프로젝트 로드됨",
-          description: `"${project.title}" 프로젝트가 로드되었습니다.`,
-        })
-      } else {
-        toast({
-          title: "오류",
-          description: "프로젝트를 찾을 수 없습니다.",
-          variant: "destructive",
-        })
       }
-    } catch (error) {
-      toast({
-        title: "오류",
-        description: "프로젝트를 로드하는 중 오류가 발생했습니다.",
-        variant: "destructive",
-      })
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  // 프로젝트 저장 (일괄 저장)
-  const saveProject = async (isAutoSave = false) => {
-    if (!session?.access_token) {
-      if (!isAutoSave) {
-        toast({
-          title: "로그인 필요",
-          description: "프로젝트를 저장하려면 로그인이 필요합니다.",
-          variant: "destructive",
-        })
-      }
-      return
-    }
-
-    setIsSaving(true)
-    try {
-      const projectData = {
-        title: projectName || "이름 없는 프로젝트",
-        description: projectDescription,
-        segments: segments.map((segment, index) => ({
-          ...segment,
-          orderIndex: index,
-        })),
-        queue: queue.map((item, index) => ({
-          ...item,
-          orderIndex: index,
-        })),
-      }
-
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session.access_token}`,
-      }
-
-      let response
-      if (currentProjectId) {
-        // 기존 프로젝트 업데이트
-        response = await fetch("/api/projects", {
-          method: "PUT",
-          headers,
-          body: JSON.stringify({ projectId: currentProjectId, ...projectData }),
-        })
-      } else {
-        // 새 프로젝트 생성
-        response = await fetch("/api/projects", {
-          method: "POST",
-          headers,
-          body: JSON.stringify(projectData),
-        })
-      }
-
-      const data = await response.json()
-
-      if (data.success) {
-        if (!currentProjectId) {
-          setCurrentProjectId(data.projectId)
-          // URL 업데이트
-          router.push(`?id=${data.projectId}`, { scroll: false })
-        }
-
-        setHasUnsavedChanges(false)
-        setLastSaveTime(new Date())
-
-        if (!isAutoSave) {
-          toast({
-            title: "저장 완료",
-            description: "프로젝트가 성공적으로 저장되었습니다.",
-          })
-        }
-      } else {
-        throw new Error(data.error || data.details)
-      }
-    } catch (error) {
-      console.error("저장 오류:", error)
-      if (!isAutoSave) {
-        toast({
-          title: "저장 실패",
-          description: error instanceof Error ? error.message : "프로젝트를 저장하는 중 오류가 발생했습니다.",
-          variant: "destructive",
-        })
-      }
-    } finally {
-      setIsSaving(false)
     }
   }
 
@@ -587,7 +447,7 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  // YouTube 검색 (무한 스크롤 지원, 중복 방지)
+  // YouTube 검색
   const searchYouTube = async (page = 1, append = false) => {
     if (!searchQuery.trim()) return
 
@@ -600,7 +460,6 @@ export default function YouTubeSegmentPlayer() {
 
       if (data.success) {
         if (append) {
-          // 중복 제거
           const existingIds = new Set(searchResults.map((v) => v.id))
           const newResults = data.results.filter((v: YouTubeVideo) => !existingIds.has(v.id))
           setSearchResults((prev) => [...prev, ...newResults])
@@ -609,7 +468,6 @@ export default function YouTubeSegmentPlayer() {
         }
         setHasMoreResults(data.results.length === 20)
 
-        // API fallback 사용 시 사용자에게 알림
         if (data.fallback && !append) {
           toast({
             title: "제한된 검색 결과",
@@ -635,7 +493,7 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  // 무한 스크롤 핸들러
+  // 무한 스크롤
   const handleScrollSearch = useCallback(() => {
     if (!searchResultsRef.current || isSearching || !hasMoreResults) return
 
@@ -647,20 +505,17 @@ export default function YouTubeSegmentPlayer() {
     }
   }, [searchPage, isSearching, hasMoreResults, searchQuery])
 
-  // 검색 결과에서 영상 선택
+  // 영상 선택
   const selectVideo = (video: YouTubeVideo) => {
-    // 이미 로드된 영상이 있는 경우 확인 모달 표시
     if (currentVideoId && currentVideoId !== video.id) {
       setPendingVideo(video)
       setShowVideoLoadConfirm(true)
       return
     }
 
-    // 로드된 영상이 없거나 같은 영상인 경우 바로 로드
     loadSelectedVideo(video)
   }
 
-  // 선택된 영상 로드 (큐와 구간 유지)
   const loadSelectedVideo = (video: YouTubeVideo) => {
     setVideoUrl(`https://www.youtube.com/watch?v=${video.id}`)
     setShowSearchDialog(false)
@@ -677,449 +532,29 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  // 영상 로드 확인 취소
   const cancelVideoLoad = () => {
     setShowVideoLoadConfirm(false)
     setPendingVideo(null)
   }
 
-  // 영상 로드 확인 (큐와 구간 유지)
   const confirmVideoLoad = () => {
     if (pendingVideo) {
       loadSelectedVideo(pendingVideo)
     }
   }
 
-  // URL에서 영상 로드
-  const loadVideoFromUrl = async (url: string) => {
-    if (!isYouTubeAPIReady) {
-      return
-    }
-
-    const videoId = extractVideoId(url)
-    if (!videoId) {
-      return
-    }
-
-    // 이미 같은 영상이 로드되어 있으면 스킵
-    if (videoId === currentVideoId) {
-      return
-    }
-
-    setCurrentVideoId(videoId)
-
-    if (playerRef.current) {
-      playerRef.current.destroy()
-    }
-
-    playerRef.current = new window.YT.Player("youtube-player", {
-      height: "315",
-      width: "100%",
-      videoId: videoId,
-      playerVars: {
-        playsinline: 1,
-        controls: 1,
-        autoplay: 0, // 자동 재생 비활성화
-      },
-      events: {
-        onReady: async (event: any) => {
-          const duration = event.target.getDuration()
-          // 안전 마진 적용 (1초)
-          const safeDuration = Math.max(0, duration - 1)
-          const title = event.target.getVideoData().title
-
-          setVideoDuration(safeDuration)
-          setVideoTitle(title)
-          setNewSegment((prev) => ({
-            ...prev,
-            title: title,
-            endTime: secondsToTime(safeDuration),
-          }))
-
-          toast({
-            title: "영상 로드됨",
-            description: "영상이 성공적으로 로드되었습니다.",
-          })
-        },
-        onStateChange: (event: any) => {
-          if (event.data === window.YT.PlayerState.PLAYING) {
-            setIsPlaying(true)
-          } else if (event.data === window.YT.PlayerState.PAUSED) {
-            setIsPlaying(false)
-          }
-        },
-        onError: (event: any) => {
-          toast({
-            title: "영상 로드 실패",
-            description: "영상을 로드할 수 없습니다. URL을 확인해주세요.",
-            variant: "destructive",
-          })
-        },
-      },
-    })
+  // 구간 관련
+  const handleAddSegment = (segment: Segment) => {
+    addSegment(segment)
   }
 
-  // 드래그 앤 드롭 핸들러
-  const handleDragStart = (e: React.DragEvent, id: string, index: number, type: "segment" | "queue") => {
-    setDraggedItem({ id, index, type })
-    e.dataTransfer.effectAllowed = "move"
-  }
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = "move"
-  }
-
-  const handleDrop = (e: React.DragEvent, dropIndex: number, type: "segment" | "queue") => {
-    e.preventDefault()
-
-    if (!draggedItem || draggedItem.type !== type) return
-
-    if (type === "segment") {
-      const reorderedSegments = reorderArray(segments, draggedItem.index, dropIndex)
-      setSegments(reorderedSegments)
-    } else {
-      const reorderedQueue = reorderArray(queue, draggedItem.index, dropIndex)
-      setQueue(reorderedQueue)
-    }
-
-    setDraggedItem(null)
-  }
-
-  // 구간 선택 토글
-  const toggleSegmentSelection = (segmentId: string) => {
-    try {
-      // 해당 ID의 구간이 실제로 존재하는지 확인
-      const segmentExists = segments.some((segment) => segment.id === segmentId)
-      if (!segmentExists) {
-        console.warn(`구간 ID ${segmentId}가 존재하지 않습니다.`)
-        return
-      }
-
-      const newSelected = new Set(selectedSegments)
-      if (newSelected.has(segmentId)) {
-        newSelected.delete(segmentId)
-      } else {
-        newSelected.add(segmentId)
-      }
-      setSelectedSegments(newSelected)
-    } catch (error) {
-      console.error("구간 선택 토글 중 오류 발생:", error)
-      // 오류 발생 시 선택 상태 초기화
-      setSelectedSegments(new Set())
+  const handlePlaySegment = (segment: Segment) => {
+    if (!tabChangeRef.current) {
+      loadVideo(segment.videoId, segment.startTime, true)
     }
   }
 
-  // 모든 구간 선택/해제
-  const toggleAllSegments = () => {
-    try {
-      if (selectedSegments.size === segments.length) {
-        setSelectedSegments(new Set())
-      } else {
-        // 유효한 ID만 포함하도록 확인
-        const validSegmentIds = segments.map((s) => s.id).filter(Boolean)
-        setSelectedSegments(new Set(validSegmentIds))
-      }
-    } catch (error) {
-      console.error("전체 구간 선택 토글 중 오류 발생:", error)
-      // 오류 발생 시 선택 상태 초기화
-      setSelectedSegments(new Set())
-    }
-  }
-
-  // 선택된 구간들을 큐에 추가
-  const addSelectedToQueue = () => {
-    const selectedSegmentObjects = segments.filter((segment) => selectedSegments.has(segment.id))
-
-    if (selectedSegmentObjects.length === 0) {
-      toast({
-        title: "선택된 구간 없음",
-        description: "큐에 추가할 구간을 선택해주세요.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    // 큐에 추가
-    const newQueueItems = selectedSegmentObjects.map((segment) => ({
-      id: generateId(),
-      type: "segment" as const,
-      segment,
-      orderIndex: queue.length + selectedSegmentObjects.indexOf(segment),
-    }))
-
-    setQueue((prev) => [...prev, ...newQueueItems])
-
-    // 상태 초기화
-    setSelectedSegments(new Set())
-    setIsMultiSelectMode(false)
-
-    // 탭 전환을 다음 렌더 사이클에서 실행
-    setTimeout(() => {
-      setActiveTab("queue")
-
-      toast({
-        title: "큐에 추가됨",
-        description: `${selectedSegmentObjects.length}개 구간이 큐에 추가되었습니다.`,
-      })
-    }, 0)
-  }
-
-  // 큐에 데이터가 있고 비디오 ID가 있으면 자동으로 비디오 로드
-  useEffect(() => {
-    if (queue.length > 0 && currentVideoId && !playerRef.current) {
-      const firstSegmentItem = queue.find((item) => item.type === "segment" && item.segment)
-      if (firstSegmentItem?.segment) {
-        loadVideoForSegment(firstSegmentItem.segment)
-      }
-    }
-  }, [queue, currentVideoId])
-
-  // YouTube API 로드 - 더 안전한 방법
-  useEffect(() => {
-    // 이미 로드되었거나 로드 중인 경우 스킵
-    if (youtubeAPILoadedRef.current || isYouTubeAPIReady) {
-      return
-    }
-
-    // 이미 API가 로드되어 있는 경우
-    if (window.YT && window.YT.Player) {
-      setIsYouTubeAPIReady(true)
-      youtubeAPILoadedRef.current = true
-      return
-    }
-
-    // 이미 스크립트가 추가되어 있는지 확인
-    const existingScript = document.querySelector('script[src*="youtube.com/iframe_api"]')
-    if (existingScript) {
-      // 스크립트는 있지만 API가 아직 로드되지 않은 경우
-      window.onYouTubeIframeAPIReady = () => {
-        console.log("YouTube API ready")
-        setIsYouTubeAPIReady(true)
-        youtubeAPILoadedRef.current = true
-      }
-      return
-    }
-
-    // 스크립트 로드 시작 플래그 설정
-    youtubeAPILoadedRef.current = true
-
-    try {
-      // 새 스크립트 요소 생성
-      const script = document.createElement("script")
-      script.src = "https://www.youtube.com/iframe_api"
-      script.async = true
-
-      // 로드 완료 이벤트 핸들러
-      script.onload = () => {
-        console.log("YouTube script loaded")
-      }
-
-      script.onerror = (error) => {
-        console.error("YouTube script load error:", error)
-        youtubeAPILoadedRef.current = false
-      }
-
-      // API 로드 완료 콜백
-      window.onYouTubeIframeAPIReady = () => {
-        console.log("YouTube API ready")
-        setIsYouTubeAPIReady(true)
-      }
-
-      // DOM에 안전하게 추가
-      const firstScript = document.getElementsByTagName("script")[0]
-      if (firstScript && firstScript.parentNode) {
-        firstScript.parentNode.insertBefore(script, firstScript)
-      } else {
-        // fallback: head에 직접 추가
-        document.head.appendChild(script)
-      }
-    } catch (error) {
-      console.error("YouTube API 로드 오류:", error)
-      youtubeAPILoadedRef.current = false
-    }
-  }, [])
-
-  // 현재 재생 중인 구간 모니터링
-  useEffect(() => {
-    if (isPlaying && queue.length > 0 && playerRef.current) {
-      intervalRef.current = setInterval(() => {
-        const currentItem = queue[currentQueueIndex]
-        if (currentItem?.type === "segment" && currentItem.segment) {
-          const currentTime = playerRef.current.getCurrentTime()
-          const fadeOutDuration = 3 // 페이드아웃에 걸리는 시간(초)
-
-          // 페이드아웃 시작 시점 = 종료 시간 - 페이드아웃 시간
-          if (currentTime >= currentItem.segment.endTime - fadeOutDuration) {
-            fadeOutAndNext()
-            // 인터벌 클리어하여 중복 실행 방지
-            if (intervalRef.current) {
-              clearInterval(intervalRef.current)
-              intervalRef.current = null
-            }
-          }
-        }
-      }, 1000)
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-        intervalRef.current = null
-      }
-    }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current)
-      }
-    }
-  }, [isPlaying, currentQueueIndex, queue])
-
-  // 새 프로젝트 시작
-  const startNewProject = () => {
-    setCurrentProjectId(null)
-    setProjectName("")
-    setProjectDescription("")
-    setProjectVisibility("public")
-    setProjectOwnerId(null)
-    setVideoUrl("")
-    setCurrentVideoId("")
-    setVideoDuration(0)
-    setVideoTitle("")
-    setSegments([])
-    setQueue([])
-    setCurrentQueueIndex(0)
-    setActiveTab("segments")
-    setSelectedSegments(new Set())
-    setIsMultiSelectMode(false)
-    setHasUnsavedChanges(false)
-    setIsProjectCreated(false)
-    setHasAccess(true)
-    setAccessError("")
-    setLastSaveTime(null)
-    router.push("/", { scroll: false })
-
-    if (playerRef.current) {
-      playerRef.current.destroy()
-      playerRef.current = null
-    }
-
-    // 새 프로젝트 자동 생성
-    createNewProject()
-
-    toast({
-      title: "새 프로젝트",
-      description: "새 프로젝트를 시작합니다.",
-    })
-  }
-
-  const timeToSeconds = (timeStr: string) => {
-    const parts = timeStr.split(":").map(Number)
-    if (parts.length === 2) {
-      return parts[0] * 60 + parts[1]
-    } else if (parts.length === 3) {
-      return parts[0] * 3600 + parts[1] * 60 + parts[2]
-    }
-    return Number.parseInt(timeStr) || 0
-  }
-
-  const secondsToTime = (seconds: number) => {
-    const hours = Math.floor(seconds / 3600)
-    const minutes = Math.floor((seconds % 3600) / 60)
-    const secs = Math.floor(seconds % 60)
-
-    if (hours > 0) {
-      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
-    }
-    return `${minutes}:${secs.toString().padStart(2, "0")}`
-  }
-
-  const validateTimeRange = (startTime: string, endTime: string) => {
-    const startSeconds = timeToSeconds(startTime)
-    const endSeconds = timeToSeconds(endTime)
-
-    if (startSeconds < 0 || endSeconds < 0) {
-      return "시간은 0보다 커야 합니다."
-    }
-
-    if (startSeconds > videoDuration || endSeconds > videoDuration) {
-      return `시간은 영상 길이(${secondsToTime(videoDuration)})를 초과할 수 없습니다.`
-    }
-
-    if (startSeconds >= endSeconds) {
-      return "시작 시간은 종료 시간보다 작아야 합니다."
-    }
-
-    return null
-  }
-
-  const addSegment = () => {
-    if (!newSegment.title.trim()) {
-      toast({
-        title: "오류",
-        description: "구간 제목을 입력해주세요.",
-        variant: "destructive",
-      })
-      titleInputRef.current?.focus()
-      return
-    }
-
-    if (!currentVideoId || !newSegment.startTime || !newSegment.endTime) {
-      toast({
-        title: "오류",
-        description: "시작 시간과 종료 시간을 모두 입력해주세요.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const validationError = validateTimeRange(newSegment.startTime, newSegment.endTime)
-    if (validationError) {
-      toast({
-        title: "오류",
-        description: validationError,
-        variant: "destructive",
-      })
-      return
-    }
-
-    const startSeconds = timeToSeconds(newSegment.startTime)
-    const endSeconds = timeToSeconds(newSegment.endTime)
-
-    const segment: Segment = {
-      id: generateId(),
-      title: newSegment.title,
-      description: newSegment.description,
-      videoId: currentVideoId,
-      videoTitle,
-      startTime: startSeconds,
-      endTime: endSeconds,
-      orderIndex: segments.length,
-    }
-
-    // 로컬 상태 업데이트
-    setSegments((prev) => [...prev, segment])
-
-    // 구간 추가 후 초기화
-    setNewSegment({
-      title: videoTitle,
-      description: "",
-      startTime: "0:00",
-      endTime: videoDuration ? secondsToTime(videoDuration) : "",
-    })
-
-    // 플레이어 자동 재생 방지 - seekTo만 수행하고 재생하지 않음
-    if (playerRef.current) {
-      playerRef.current.seekTo(0)
-      // playVideo() 호출 제거
-    }
-
-    toast({
-      title: "성공",
-      description: "구간이 추가되었습니다.",
-    })
-  }
-
-  const startEditSegment = (segment: Segment) => {
+  const handleEditSegment = (segment: Segment) => {
     setEditingSegment(segment)
     setEditForm({
       title: segment.title,
@@ -1129,7 +564,7 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  const saveEditSegment = () => {
+  const handleSaveEditSegment = () => {
     if (!editingSegment) return
 
     if (!editForm.title.trim()) {
@@ -1141,7 +576,7 @@ export default function YouTubeSegmentPlayer() {
       return
     }
 
-    const validationError = validateTimeRange(editForm.startTime, editForm.endTime)
+    const validationError = validateTimeRange(editForm.startTime, editForm.endTime, videoDuration)
     if (validationError) {
       toast({
         title: "오류",
@@ -1159,67 +594,16 @@ export default function YouTubeSegmentPlayer() {
       endTime: timeToSeconds(editForm.endTime),
     }
 
-    // 로컬 상태 업데이트
-    setSegments((prev) => prev.map((seg) => (seg.id === editingSegment.id ? updatedSegment : seg)))
-
-    // 큐에서도 업데이트
-    setQueue((prev) =>
-      prev.map((item) =>
-        item.type === "segment" && item.segment?.id === editingSegment.id ? { ...item, segment: updatedSegment } : item,
-      ),
-    )
-
+    updateSegment(editingSegment.id, updatedSegment)
     setEditingSegment(null)
+
     toast({
       title: "성공",
       description: "구간이 수정되었습니다.",
     })
   }
 
-  const fadeOutAndNext = () => {
-    // 이미 페이드아웃 중인지 확인하는 플래그
-    if (playerRef.current && playerRef.current.setVolume && !playerRef.current.isFadingOut) {
-      playerRef.current.isFadingOut = true
-
-      // 페이드 아웃 (3배 길게)
-      let volume = 100
-      const fadeOut = setInterval(() => {
-        volume -= 5
-        if (volume <= 0) {
-          clearInterval(fadeOut)
-          playerRef.current.setVolume(0)
-          playerRef.current.isFadingOut = false
-          playNextInQueue()
-
-          // 페이드 인
-          setTimeout(() => {
-            if (playerRef.current) {
-              let volume = 0
-              const fadeIn = setInterval(() => {
-                volume += 5
-                if (volume >= 100) {
-                  clearInterval(fadeIn)
-                  if (playerRef.current) {
-                    playerRef.current.setVolume(100)
-                  }
-                } else {
-                  if (playerRef.current) {
-                    playerRef.current.setVolume(volume)
-                  }
-                }
-              }, 150)
-            }
-          }, 300)
-        } else {
-          if (playerRef.current) {
-            playerRef.current.setVolume(volume)
-          }
-        }
-      }, 150)
-    }
-  }
-
-  const addToQueue = (segment: Segment) => {
+  const handleAddToQueue = (segment: Segment) => {
     const queueItem: QueueItem = {
       id: generateId(),
       type: "segment",
@@ -1227,8 +611,8 @@ export default function YouTubeSegmentPlayer() {
       orderIndex: queue.length,
     }
 
-    setQueue((prev) => [...prev, queueItem])
-    setActiveTab("queue")
+    addToQueue(queueItem)
+    handleTabChange("queue")
 
     toast({
       title: "큐에 추가됨",
@@ -1236,7 +620,34 @@ export default function YouTubeSegmentPlayer() {
     })
   }
 
-  const addDescriptionToQueue = () => {
+  const handleAddSelectedToQueue = (selectedSegments: Segment[]) => {
+    if (selectedSegments.length === 0) {
+      toast({
+        title: "선택된 구간 없음",
+        description: "큐에 추가할 구간을 선택해주세요.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const newQueueItems = selectedSegments.map((segment) => ({
+      id: generateId(),
+      type: "segment" as const,
+      segment,
+      orderIndex: queue.length + selectedSegments.indexOf(segment),
+    }))
+
+    newQueueItems.forEach((item) => addToQueue(item))
+    handleTabChange("queue")
+
+    toast({
+      title: "큐에 추가됨",
+      description: `${selectedSegments.length}개 구간이 큐에 추가되었습니다.`,
+    })
+  }
+
+  // 큐 관련
+  const handleAddDescriptionToQueue = () => {
     if (!newDescription.trim()) {
       toast({
         title: "오류",
@@ -1253,110 +664,13 @@ export default function YouTubeSegmentPlayer() {
       orderIndex: queue.length,
     }
 
-    setQueue((prev) => [...prev, queueItem])
+    addToQueue(queueItem)
     setNewDescription("")
-    setActiveTab("queue")
+    handleTabChange("queue")
 
     toast({
       title: "설명 블럭 추가됨",
       description: "큐에 설명 블럭이 추가되었습니다.",
-    })
-  }
-
-  const removeFromQueue = (queueItemId: string) => {
-    setQueue((prev) => prev.filter((item) => item.id !== queueItemId))
-  }
-
-  const removeSegment = (segmentId: string) => {
-    // 로컬 상태에서 삭제
-    setSegments((prev) => prev.filter((seg) => seg.id !== segmentId))
-    // 큐에서도 제거
-    setQueue((prev) => prev.filter((item) => item.segment?.id !== segmentId))
-    // 선택된 구간에서도 제거
-    setSelectedSegments((prev) => {
-      const newSet = new Set(prev)
-      newSet.delete(segmentId)
-      return newSet
-    })
-  }
-
-  const playSegment = (segment: Segment) => {
-    if (!playerRef.current) {
-      // 플레이어가 없으면 먼저 로드
-      loadVideoForSegment(segment)
-      return
-    }
-
-    // 이미 같은 영상이면 seekTo만 수행
-    if (segment.videoId === currentVideoId) {
-      playerRef.current.seekTo(segment.startTime)
-      playerRef.current.playVideo()
-    } else {
-      // 다른 영상이면 loadVideoById 사용
-      playerRef.current.loadVideoById({
-        videoId: segment.videoId,
-        startSeconds: segment.startTime,
-      })
-      setCurrentVideoId(segment.videoId)
-    }
-  }
-
-  const loadVideoForSegment = (segment: Segment) => {
-    if (!isYouTubeAPIReady) {
-      toast({
-        title: "오류",
-        description: "YouTube API가 아직 로드되지 않았습니다.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    // 이미 같은 영상이고 플레이어가 있으면 seekTo만 수행
-    if (playerRef.current && segment.videoId === currentVideoId) {
-      playerRef.current.seekTo(segment.startTime)
-      playerRef.current.playVideo()
-      return
-    }
-
-    setCurrentVideoId(segment.videoId)
-
-    if (playerRef.current) {
-      playerRef.current.destroy()
-    }
-
-    playerRef.current = new window.YT.Player("youtube-player", {
-      height: "315",
-      width: "100%",
-      videoId: segment.videoId,
-      playerVars: {
-        playsinline: 1,
-        controls: 1,
-        start: segment.startTime,
-        autoplay: 1,
-      },
-      events: {
-        onReady: (event: any) => {
-          const duration = event.target.getDuration()
-          // 안전 마진 적용 (1초)
-          const safeDuration = Math.max(0, duration - 1)
-          const title = event.target.getVideoData().title
-          setVideoDuration(safeDuration)
-          setVideoTitle(title)
-
-          // 시작 시간으로 이동하고 재생
-          event.target.seekTo(segment.startTime)
-          setTimeout(() => {
-            event.target.playVideo()
-          }, 100)
-        },
-        onStateChange: (event: any) => {
-          if (event.data === window.YT.PlayerState.PLAYING) {
-            setIsPlaying(true)
-          } else if (event.data === window.YT.PlayerState.PAUSED) {
-            setIsPlaying(false)
-          }
-        },
-      },
     })
   }
 
@@ -1373,18 +687,15 @@ export default function YouTubeSegmentPlayer() {
     setCurrentQueueIndex(0)
     const firstItem = queue[0]
     if (firstItem.type === "segment" && firstItem.segment) {
-      playSegment(firstItem.segment)
+      handlePlaySegment(firstItem.segment)
     } else if (firstItem.type === "segment" && !firstItem.segment) {
-      // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
       toast({
         title: "재생 불가",
         description: "이 구간에 대한 데이터를 찾을 수 없습니다. 다음 항목으로 넘어갑니다.",
         variant: "destructive",
       })
-      // 다음 아이템으로 넘어감
       playNextInQueue()
     } else {
-      // 설명 블럭인 경우
       toast({
         title: "설명 표시",
         description: firstItem.description || "설명 블럭입니다.",
@@ -1400,23 +711,20 @@ export default function YouTubeSegmentPlayer() {
       const nextItem = queue[nextIndex]
 
       if (nextItem.type === "segment" && nextItem.segment) {
-        playSegment(nextItem.segment)
+        handlePlaySegment(nextItem.segment)
       } else if (nextItem.type === "segment" && !nextItem.segment) {
-        // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
         toast({
           title: "재생 불가",
           description: "이 구간에 대한 데이터를 찾을 수 없습니다. 다음 항목으로 넘어갑니다.",
           variant: "destructive",
         })
-        // 다음 아이템으로 넘어감
         setTimeout(() => playNextInQueue(), 1000)
       } else {
-        // 설명 블럭인 경우
         toast({
           title: "설명 표시",
           description: nextItem.description || "설명 블럭입니다.",
         })
-        setTimeout(() => playNextInQueue(), 3000) // 설명 블럭은 3초 표시
+        setTimeout(() => playNextInQueue(), 3000)
       }
     } else {
       setIsPlaying(false)
@@ -1431,16 +739,14 @@ export default function YouTubeSegmentPlayer() {
     const item = queue[index]
     if (item.type === "segment" && item.segment) {
       setCurrentQueueIndex(index)
-      playSegment(item.segment)
+      handlePlaySegment(item.segment)
     } else if (item.type === "segment" && !item.segment) {
-      // 세그먼트 타입이지만 세그먼트 데이터가 없는 경우
       toast({
         title: "재생 불가",
         description: "이 구간에 대한 데이터를 찾을 수 없습니다.",
         variant: "destructive",
       })
     } else {
-      // 설명 블럭인 경우
       toast({
         title: "설명 표시",
         description: item.description || "설명 블럭입니다.",
@@ -1448,46 +754,47 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  const getCurrentTime = () => {
-    if (playerRef.current && playerRef.current.getCurrentTime) {
-      return Math.floor(playerRef.current.getCurrentTime())
-    }
-    return 0
+  const fadeOutAndNext = () => {
+    let volume = 100
+    const fadeOut = setInterval(() => {
+      volume -= 5
+      if (volume <= 0) {
+        clearInterval(fadeOut)
+        setVolume(0)
+        playNextInQueue()
+
+        setTimeout(() => {
+          let volume = 0
+          const fadeIn = setInterval(() => {
+            volume += 5
+            if (volume >= 100) {
+              clearInterval(fadeIn)
+              setVolume(100)
+            } else {
+              setVolume(volume)
+            }
+          }, 150)
+        }, 300)
+      } else {
+        setVolume(volume)
+      }
+    }, 150)
   }
 
-  const setCurrentTimeAsStart = () => {
-    const currentTime = getCurrentTime()
-    setNewSegment((prev) => ({ ...prev, startTime: secondsToTime(currentTime) }))
-  }
-
-  const setCurrentTimeAsEnd = () => {
-    const currentTime = getCurrentTime()
-    setNewSegment((prev) => ({ ...prev, endTime: secondsToTime(currentTime) }))
-  }
-
+  // 유틸리티
   const seekBy = (seconds: number) => {
-    if (playerRef.current && playerRef.current.getCurrentTime) {
-      const currentTime = playerRef.current.getCurrentTime()
+    if (!tabChangeRef.current) {
+      const currentTime = getCurrentTime()
       const newTime = Math.max(0, Math.min(videoDuration, currentTime + seconds))
-      playerRef.current.seekTo(newTime)
+      seekTo(newTime)
     }
   }
 
   const seekToTime = (seconds: number) => {
-    if (playerRef.current) {
+    if (!tabChangeRef.current) {
       const clampedTime = Math.max(0, Math.min(videoDuration, seconds))
-      playerRef.current.seekTo(clampedTime)
+      seekTo(clampedTime)
     }
-  }
-
-  const seekToStart = () => {
-    const startTime = timeToSeconds(newSegment.startTime)
-    seekToTime(startTime)
-  }
-
-  const seekToEnd = () => {
-    const endTime = timeToSeconds(newSegment.endTime)
-    seekToTime(endTime)
   }
 
   const shareCurrentState = async () => {
@@ -1516,17 +823,21 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  // 플레이어 최대화 토글
-  const togglePlayerMaximize = () => {
-    setIsPlayerMaximized(!isPlayerMaximized)
+  const startNewProject = () => {
+    resetProject()
+    router.push("/", { scroll: false })
+    handleCreateNewProject()
+
+    toast({
+      title: "새 프로젝트",
+      description: "새 프로젝트를 시작합니다.",
+    })
   }
 
-  // 맨 위로 스크롤
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 
-  // 공개범위 아이콘 가져오기
   const getVisibilityIcon = () => {
     switch (projectVisibility) {
       case "public":
@@ -1540,7 +851,6 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  // 공개범위 라벨 가져오기
   const getVisibilityLabel = () => {
     switch (projectVisibility) {
       case "public":
@@ -1554,7 +864,7 @@ export default function YouTubeSegmentPlayer() {
     }
   }
 
-  // 로딩 중인 경우
+  // 로딩 중
   if (loading) {
     return (
       <div className="container mx-auto p-6 max-w-7xl">
@@ -1568,20 +878,18 @@ export default function YouTubeSegmentPlayer() {
     )
   }
 
-  // 접근 권한이 없는 경우
+  // 접근 권한 없음
   if (!hasAccess) {
     return (
       <div className="container mx-auto p-6 max-w-4xl">
         <div className="flex items-center justify-center min-h-[60vh]">
-          <Card className="w-full max-w-md">
-            <CardHeader className="text-center">
-              <div className="flex justify-center mb-4">
-                <EyeOff className="w-12 h-12 text-muted-foreground" />
-              </div>
-              <CardTitle className="text-xl">접근 제한</CardTitle>
-              <CardDescription>{accessError}</CardDescription>
-            </CardHeader>
-            <CardContent className="text-center space-y-4">
+          <div className="w-full max-w-md">
+            <div className="text-center mb-4">
+              <EyeOff className="w-12 h-12 mx-auto text-muted-foreground" />
+            </div>
+            <h1 className="text-xl font-semibold text-center mb-2">접근 제한</h1>
+            <p className="text-muted-foreground text-center mb-4">{accessError}</p>
+            <div className="text-center space-y-4">
               {!user ? (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">로그인하여 프로젝트에 접근하세요.</p>
@@ -1594,13 +902,14 @@ export default function YouTubeSegmentPlayer() {
                 <Home className="w-4 h-4 mr-2" />
                 메인 화면으로 돌아가기
               </Button>
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       </div>
     )
   }
 
+  // 프로젝트 로딩 중
   if (isLoading) {
     return (
       <div className="container mx-auto p-6 max-w-7xl">
@@ -1614,7 +923,6 @@ export default function YouTubeSegmentPlayer() {
     )
   }
 
-  // 재생 큐 탭에서는 편집 UI 숨기기
   const showEditingUI = activeTab !== "queue"
 
   return (
@@ -1622,6 +930,8 @@ export default function YouTubeSegmentPlayer() {
       <div className="flex items-center justify-between mb-8">
         <div className="flex-1">
           <h1 className="text-3xl font-bold">Pi Que.</h1>
+          {isAPILoading && <p className="text-sm text-muted-foreground mt-1">YouTube API 로딩 중...</p>}
+          {isInitializing && <p className="text-sm text-amber-600 mt-1">플레이어 초기화 중...</p>}
         </div>
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
@@ -1633,195 +943,38 @@ export default function YouTubeSegmentPlayer() {
       <div className={`grid gap-8 ${isPlayerMaximized ? "grid-cols-[1fr_300px]" : "grid-cols-1 lg:grid-cols-2"}`}>
         {/* 왼쪽: 영상 플레이어 및 컨트롤 */}
         <div className="space-y-6">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>YouTube 영상 플레이어</CardTitle>
-                <CardDescription>
-                  YouTube URL을 입력하거나 검색하여 영상을 로드하세요
-                  {videoDuration > 0 && <span className="ml-2">• 총 길이: {secondsToTime(videoDuration)}</span>}
-                </CardDescription>
-              </div>
-              <Button variant="ghost" size="icon" onClick={togglePlayerMaximize} className="ml-2">
-                {isPlayerMaximized ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {showEditingUI && (
-                <div className="flex gap-3">
-                  <Input
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    value={videoUrl}
-                    onChange={(e) => setVideoUrl(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button onClick={() => setShowSearchDialog(true)} variant="outline">
-                    <Youtube className="w-4 h-4 mr-2" />
-                    YouTube에서 찾기
-                  </Button>
-                </div>
-              )}
-
-              <div id="youtube-player" className="w-full aspect-video bg-muted rounded-lg"></div>
-
-              {/* 정밀 시간 이동 컨트롤 */}
-              {showEditingUI && (
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-4 h-4" />
-                    <span className="text-sm font-medium">정밀 시간 이동</span>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="outline" onClick={() => seekBy(-10)} className="text-xs">
-                        -10초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(-5)} className="text-xs">
-                        -5초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(-1)} className="text-xs">
-                        -1초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(-0.1)} className="text-xs">
-                        -0.1초
-                      </Button>
-                    </div>
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="outline" onClick={() => seekBy(0.1)} className="text-xs">
-                        +0.1초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(1)} className="text-xs">
-                        +1초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(5)} className="text-xs">
-                        +5초
-                      </Button>
-                      <Button size="sm" variant="outline" onClick={() => seekBy(10)} className="text-xs">
-                        +10초
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                    <Target className="w-4 h-4 text-muted-foreground" />
-                    <Label htmlFor="seek-time" className="text-sm font-medium">
-                      특정 시간으로 이동:
-                    </Label>
-                    <Input
-                      id="seek-time"
-                      placeholder="mm:ss"
-                      className="w-24"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          const timeStr = (e.target as HTMLInputElement).value
-                          const seconds = timeToSeconds(timeStr)
-                          seekToTime(seconds)
-                          ;(e.target as HTMLInputElement).value = ""
-                        }
-                      }}
-                    />
-                    <span className="text-xs text-muted-foreground">Enter</span>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <YouTubePlayer
+            videoUrl={videoUrl}
+            onVideoUrlChange={setVideoUrl}
+            onSearchClick={() => setShowSearchDialog(true)}
+            onSeekBy={seekBy}
+            onSeekTo={seekToTime}
+            isMaximized={isPlayerMaximized}
+            onToggleMaximize={() => setIsPlayerMaximized(!isPlayerMaximized)}
+            showControls={showEditingUI}
+            isPlayerReady={isPlayerReady}
+            isInitializing={isInitializing}
+          />
 
           {!isPlayerMaximized && showEditingUI && (
             <>
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+              <SegmentForm
+                currentVideoId={currentVideoId}
+                videoTitle={videoTitle}
+                videoDuration={videoDuration}
+                onAddSegment={handleAddSegment}
+                onGetCurrentTime={getCurrentTime}
+                onSeekTo={seekTo}
+                isExpanded={isSegmentFormExpanded}
+                onToggleExpanded={() => setIsSegmentFormExpanded(!isSegmentFormExpanded)}
+              />
+
+              {/* 설명 블럭 추가 폼 */}
+              <div className="bg-card rounded-lg border p-6">
+                <div className="flex items-center justify-between mb-4">
                   <div>
-                    <CardTitle>구간 추가</CardTitle>
-                    <CardDescription>현재 영상에서 구간을 만드세요</CardDescription>
-                  </div>
-                  <Button variant="ghost" size="icon" onClick={() => setIsSegmentFormExpanded(!isSegmentFormExpanded)}>
-                    {isSegmentFormExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-                  </Button>
-                </CardHeader>
-                {isSegmentFormExpanded && (
-                  <CardContent className="space-y-4 pt-0">
-                    <div>
-                      <Label htmlFor="segment-title">구간 제목 *</Label>
-                      <Input
-                        ref={titleInputRef}
-                        id="segment-title"
-                        placeholder="구간 제목을 입력하세요"
-                        value={newSegment.title}
-                        onChange={(e) => setNewSegment((prev) => ({ ...prev, title: e.target.value }))}
-                      />
-                    </div>
-
-                    <div>
-                      <Label htmlFor="segment-description">구간 설명</Label>
-                      <Textarea
-                        id="segment-description"
-                        placeholder="구간에 대한 설명을 입력하세요"
-                        value={newSegment.description}
-                        onChange={(e) => setNewSegment((prev) => ({ ...prev, description: e.target.value }))}
-                        rows={3}
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <Label htmlFor="start-time">시작 시간</Label>
-                        <div className="flex gap-1">
-                          <Input
-                            id="start-time"
-                            placeholder="0:00"
-                            value={newSegment.startTime}
-                            onChange={(e) => setNewSegment((prev) => ({ ...prev, startTime: e.target.value }))}
-                            className="flex-1"
-                          />
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={setCurrentTimeAsStart}
-                            title="현재 시간으로 설정"
-                          >
-                            현재
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={seekToStart} title="시작점으로 이동">
-                            <SkipBack className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div>
-                        <Label htmlFor="end-time">종료 시간</Label>
-                        <div className="flex gap-1">
-                          <Input
-                            id="end-time"
-                            placeholder="1:00"
-                            value={newSegment.endTime}
-                            onChange={(e) => setNewSegment((prev) => ({ ...prev, endTime: e.target.value }))}
-                            className="flex-1"
-                          />
-                          <Button size="sm" variant="outline" onClick={setCurrentTimeAsEnd} title="현재 시간으로 설정">
-                            현재
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={seekToEnd} title="종료점으로 이동">
-                            <SkipToEnd className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Button onClick={addSegment} className="w-full" size="lg">
-                      <Plus className="w-4 h-4 mr-2" />
-                      구간 추가
-                    </Button>
-                  </CardContent>
-                )}
-              </Card>
-
-              <Card>
-                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                  <div>
-                    <CardTitle>설명 블럭 추가</CardTitle>
-                    <CardDescription>큐에 설명이나 메모를 추가하세요</CardDescription>
+                    <h3 className="text-lg font-semibold">설명 블럭 추가</h3>
+                    <p className="text-sm text-muted-foreground">큐에 설명이나 메모를 추가하세요</p>
                   </div>
                   <Button
                     variant="ghost"
@@ -1834,40 +987,30 @@ export default function YouTubeSegmentPlayer() {
                       <ChevronDown className="w-5 h-5" />
                     )}
                   </Button>
-                </CardHeader>
+                </div>
                 {isDescriptionFormExpanded && (
-                  <CardContent className="space-y-4 pt-0">
-                    <Textarea
+                  <div className="space-y-4">
+                    <textarea
                       placeholder="설명이나 메모를 입력하세요"
                       value={newDescription}
                       onChange={(e) => setNewDescription(e.target.value)}
                       rows={4}
+                      className="w-full p-3 border rounded-md resize-none"
                     />
-                    <Button onClick={addDescriptionToQueue} className="w-full">
+                    <Button onClick={handleAddDescriptionToQueue} className="w-full">
                       <MessageSquare className="w-4 h-4 mr-2" />
                       설명 블럭 추가
                     </Button>
-                  </CardContent>
+                  </div>
                 )}
-              </Card>
+              </div>
             </>
           )}
         </div>
 
-        {/* 오른쪽: 구간 목록 및 재생 큐 (탭으로 전환) */}
+        {/* 오른쪽: 구간 목록 및 재생 큐 */}
         <div className="space-y-6">
-          <Tabs
-            value={activeTab}
-            onValueChange={(value) => {
-              // 상태 초기화를 먼저 수행
-              if (value !== activeTab) {
-                setIsMultiSelectMode(false)
-                setSelectedSegments(new Set())
-                setActiveTab(value)
-              }
-            }}
-            className="w-full"
-          >
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="segments" className="flex items-center gap-2">
                 <MessageSquare className="w-4 h-4" />
@@ -1880,188 +1023,64 @@ export default function YouTubeSegmentPlayer() {
             </TabsList>
 
             <TabsContent value="segments" className="mt-6">
-              <Card className={isPlayerMaximized ? "h-[calc(100vh-200px)]" : "h-[800px]"}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle>생성된 구간</CardTitle>
-                      <CardDescription>총 {segments.length}개의 구간</CardDescription>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {isMultiSelectMode && (
-                        <>
-                          <Button size="sm" variant="outline" onClick={toggleAllSegments}>
-                            {selectedSegments.size === segments.length ? "전체 해제" : "전체 선택"}
-                          </Button>
-                          <Button size="sm" onClick={addSelectedToQueue} disabled={selectedSegments.size === 0}>
-                            <ListPlus className="w-4 h-4 mr-2" />
-                            선택된 구간 추가 ({selectedSegments.size})
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setIsMultiSelectMode(false)
-                              setSelectedSegments(new Set())
-                            }}
-                          >
-                            취소
-                          </Button>
-                        </>
-                      )}
-                      {!isMultiSelectMode && segments.length > 0 && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            // 선택 상태 초기화 후 다중 선택 모드 활성화
-                            setSelectedSegments(new Set())
-                            setIsMultiSelectMode(true)
-                          }}
-                        >
-                          <PlusCircle className="w-4 h-4 mr-2" />
-                          다중 선택
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div
-                    className={`space-y-3 overflow-y-auto ${isPlayerMaximized ? "max-h-[calc(100vh-300px)]" : "max-h-[700px]"}`}
-                  >
-                    {segments.map((segment, index) => (
-                      <div
-                        key={segment.id}
-                        draggable={!isMultiSelectMode}
-                        onDragStart={(e) => handleDragStart(e, segment.id, index, "segment")}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, index, "segment")}
-                        className={`border rounded-lg p-4 space-y-3 transition-colors ${
-                          isMultiSelectMode
-                            ? selectedSegments.has(segment.id)
-                              ? "bg-primary/10 border-primary"
-                              : "hover:bg-muted/50 cursor-pointer"
-                            : "hover:bg-muted/50 cursor-move"
-                        }`}
-                        onClick={() => isMultiSelectMode && toggleSegmentSelection(segment.id)}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-start gap-3 flex-1 min-w-0">
-                            {!isMultiSelectMode && (
-                              <div className="mt-1 cursor-move">
-                                <GripVertical className="w-4 h-4 text-muted-foreground" />
-                              </div>
-                            )}
-                            {isMultiSelectMode && (
-                              <div className="mt-1">
-                                <input
-                                  type="checkbox"
-                                  checked={selectedSegments.has(segment.id)}
-                                  onChange={() => toggleSegmentSelection(segment.id)}
-                                  className="w-4 h-4"
-                                />
-                              </div>
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium truncate">{segment.title}</div>
-                              <div className="text-sm text-muted-foreground">
-                                {secondsToTime(segment.startTime)} - {secondsToTime(segment.endTime)}
-                                <span className="ml-2 text-xs">
-                                  ({secondsToTime(segment.endTime - segment.startTime)})
-                                </span>
-                              </div>
-                              {segment.description && (
-                                <div className="text-sm text-muted-foreground mt-1 italic line-clamp-2">
-                                  {segment.description}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          {!isMultiSelectMode && (
-                            <div className="flex gap-1 ml-2">
-                              <Button size="sm" variant="outline" onClick={() => playSegment(segment)} title="재생">
-                                <PlayCircle className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => startEditSegment(segment)}
-                                title="편집"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button size="sm" onClick={() => addToQueue(segment)} title="큐에 추가">
-                                <Plus className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => removeSegment(segment.id)}
-                                title="삭제"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {segments.length === 0 && (
-                      <div className="text-center text-muted-foreground py-12">
-                        <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                        <p>아직 생성된 구간이 없습니다</p>
-                        <p className="text-sm">영상을 로드하고 구간을 추가해보세요</p>
-                      </div>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
+              <SegmentsTab
+                segments={segments}
+                onPlaySegment={handlePlaySegment}
+                onEditSegment={handleEditSegment}
+                onAddToQueue={handleAddToQueue}
+                onRemoveSegment={removeSegment}
+                onReorderSegments={reorderSegments}
+                onAddSelectedToQueue={handleAddSelectedToQueue}
+                isMaximized={isPlayerMaximized}
+              />
             </TabsContent>
 
             <TabsContent value="queue" className="mt-6">
-              <Card className={isPlayerMaximized ? "h-[calc(100vh-200px)]" : "h-[800px]"}>
-                <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    재생 큐
+              {/* 큐 탭 내용 */}
+              <div className={`bg-card rounded-lg border ${isPlayerMaximized ? "h-[calc(100vh-200px)]" : "h-[800px]"}`}>
+                <div className="p-6 border-b">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold">재생 큐</h3>
+                      <p className="text-sm text-muted-foreground">
+                        총 {queue.length}개 항목
+                        {queue.length > 0 && (
+                          <span className="ml-2">
+                            (현재: {currentQueueIndex + 1} / {queue.length})
+                          </span>
+                        )}
+                      </p>
+                    </div>
                     <div className="flex gap-2">
-                      <Button size="sm" onClick={playQueue} disabled={queue.length === 0}>
+                      <Button size="sm" onClick={playQueue} disabled={queue.length === 0 || isInitializing}>
                         <Play className="w-4 h-4 mr-2" />큐 재생
                       </Button>
-                      <Button size="sm" variant="outline" onClick={playNextInQueue} disabled={queue.length === 0}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={playNextInQueue}
+                        disabled={queue.length === 0 || isInitializing}
+                      >
                         <SkipForward className="w-4 h-4" />
                       </Button>
                     </div>
-                  </CardTitle>
-                  <CardDescription>
-                    총 {queue.length}개 항목
-                    {queue.length > 0 && (
-                      <span className="ml-2">
-                        (현재: {currentQueueIndex + 1} / {queue.length})
-                      </span>
-                    )}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
+                  </div>
+                </div>
+                <div className="p-6">
                   <div
                     className={`space-y-3 overflow-y-auto ${isPlayerMaximized ? "max-h-[calc(100vh-300px)]" : "max-h-[700px]"}`}
                   >
                     {queue.map((item, index) => (
                       <div
                         key={item.id}
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, item.id, index, "queue")}
-                        onDragOver={handleDragOver}
-                        onDrop={(e) => handleDrop(e, index, "queue")}
-                        className={`border rounded-lg p-4 transition-all cursor-move ${
+                        className={`border rounded-lg p-4 transition-all cursor-pointer ${
                           index === currentQueueIndex ? "bg-primary/10 border-primary shadow-md" : "hover:bg-muted/50"
                         }`}
-                        onClick={() => item.type === "segment" && item.segment && playQueueItem(index)}
+                        onClick={() =>
+                          item.type === "segment" && item.segment && !isInitializing && playQueueItem(index)
+                        }
                       >
                         <div className="flex items-start gap-3">
-                          <div className="mt-1">
-                            <GripVertical className="w-4 h-4 text-muted-foreground" />
-                          </div>
                           <Badge
                             variant={index === currentQueueIndex ? "default" : "secondary"}
                             className="mt-0.5 min-w-[2rem] justify-center"
@@ -2085,7 +1104,6 @@ export default function YouTubeSegmentPlayer() {
                                 )}
                               </>
                             ) : item.type === "segment" && !item.segment ? (
-                              // 세그먼트 타입이지만 데이터가 없는 경우
                               <div className="flex items-start gap-2">
                                 <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
                                 <div>
@@ -2096,7 +1114,6 @@ export default function YouTubeSegmentPlayer() {
                                 </div>
                               </div>
                             ) : (
-                              // 설명 블럭인 경우
                               <div className="flex items-start gap-2">
                                 <MessageSquare className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
                                 <div className="text-sm text-muted-foreground italic break-words">
@@ -2114,7 +1131,7 @@ export default function YouTubeSegmentPlayer() {
                             }}
                             title="큐에서 제거"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <X className="w-4 h-4" />
                           </Button>
                         </div>
                       </div>
@@ -2127,8 +1144,8 @@ export default function YouTubeSegmentPlayer() {
                       </div>
                     )}
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </div>
             </TabsContent>
           </Tabs>
         </div>
@@ -2252,6 +1269,7 @@ export default function YouTubeSegmentPlayer() {
         </Button>
       )}
 
+      {/* 모든 다이얼로그들 */}
       {/* 영상 로드 확인 모달 */}
       <Dialog open={showVideoLoadConfirm} onOpenChange={setShowVideoLoadConfirm}>
         <DialogContent className="max-w-md">
@@ -2422,11 +1440,12 @@ export default function YouTubeSegmentPlayer() {
             </div>
             <div>
               <Label htmlFor="edit-description">구간 설명</Label>
-              <Textarea
+              <textarea
                 id="edit-description"
                 value={editForm.description}
                 onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
                 rows={3}
+                className="w-full p-3 border rounded-md resize-none"
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -2452,7 +1471,7 @@ export default function YouTubeSegmentPlayer() {
                 <X className="w-4 h-4 mr-2" />
                 취소
               </Button>
-              <Button onClick={saveEditSegment}>
+              <Button onClick={handleSaveEditSegment}>
                 <Save className="w-4 h-4 mr-2" />
                 저장
               </Button>
