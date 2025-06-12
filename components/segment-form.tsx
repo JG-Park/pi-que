@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -41,6 +41,17 @@ export function SegmentForm({
   })
 
   const titleInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    // 비디오가 로드되고 제목과 길이가 있을 때 자동으로 설정
+    if (videoTitle && videoDuration > 0) {
+      setNewSegment((prev) => ({
+        ...prev,
+        title: videoTitle,
+        endTime: `${Math.floor(videoDuration / 60)}:${(videoDuration % 60).toString().padStart(2, "0")}`,
+      }))
+    }
+  }, [videoTitle, videoDuration])
 
   const setCurrentTimeAsStart = () => {
     const currentTime = onGetCurrentTime()
@@ -116,7 +127,7 @@ export function SegmentForm({
 
     // 구간 추가 후 초기화
     setNewSegment({
-      title: videoTitle,
+      title: videoTitle || "",
       description: "",
       startTime: "0:00",
       endTime: videoDuration
