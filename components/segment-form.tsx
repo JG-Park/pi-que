@@ -34,24 +34,44 @@ export function SegmentForm({
   onToggleExpanded,
 }: SegmentFormProps) {
   const [newSegment, setNewSegment] = useState({
-    title: videoTitle || "",
+    title: "",
     description: "",
     startTime: "0:00",
     endTime: "",
   })
 
   const titleInputRef = useRef<HTMLInputElement>(null)
+  const lastVideoIdRef = useRef<string>("")
+  const lastVideoTitleRef = useRef<string>("")
+  const lastVideoDurationRef = useRef<number>(0)
 
+  // 영상이 변경될 때마다 폼 초기화 및 자동 입력
   useEffect(() => {
-    // 비디오가 로드되고 제목과 길이가 있을 때 자동으로 설정
-    if (videoTitle && videoDuration > 0) {
-      setNewSegment((prev) => ({
-        ...prev,
-        title: videoTitle,
-        endTime: `${Math.floor(videoDuration / 60)}:${(videoDuration % 60).toString().padStart(2, "0")}`,
-      }))
+    // 비디오 ID가 변경되었거나, 제목이나 길이가 업데이트된 경우
+    const videoChanged = currentVideoId && currentVideoId !== lastVideoIdRef.current
+    const titleChanged = videoTitle && videoTitle !== lastVideoTitleRef.current
+    const durationChanged = videoDuration > 0 && videoDuration !== lastVideoDurationRef.current
+
+    if (videoChanged || titleChanged || durationChanged) {
+      console.log("영상 정보 변경 감지:", { videoChanged, titleChanged, durationChanged })
+
+      // 참조값 업데이트
+      lastVideoIdRef.current = currentVideoId
+      lastVideoTitleRef.current = videoTitle
+      lastVideoDurationRef.current = videoDuration
+
+      // 폼 업데이트
+      setNewSegment({
+        title: videoTitle || "",
+        description: "",
+        startTime: "0:00",
+        endTime:
+          videoDuration > 0
+            ? `${Math.floor(videoDuration / 60)}:${(videoDuration % 60).toString().padStart(2, "0")}`
+            : "",
+      })
     }
-  }, [videoTitle, videoDuration])
+  }, [currentVideoId, videoTitle, videoDuration])
 
   const setCurrentTimeAsStart = () => {
     const currentTime = onGetCurrentTime()
@@ -125,7 +145,7 @@ export function SegmentForm({
 
     onAddSegment(segment)
 
-    // 구간 추가 후 초기화
+    // 구간 추가 후 초기화 (현재 영상 정보로)
     setNewSegment({
       title: videoTitle || "",
       description: "",
