@@ -137,6 +137,8 @@ export default function YouTubeSegmentPlayerPage() {
   const searchResultsRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const tabChangeRef = useRef(false)
+  const lastProcessedUrlRef = useRef<string>("")
+  const isLoadingVideoRef = useRef(false)
 
   // YouTube 플레이어 - 탭 변경 감지 추가
   const {
@@ -155,9 +157,19 @@ export default function YouTubeSegmentPlayerPage() {
     onVideoReady: (duration, title) => {
       setVideoDuration(duration)
       setVideoTitle(title)
+      isLoadingVideoRef.current = false
     },
     onStateChange: (playing) => {
-      setIsPlaying(playing)
+      // 큐 재생 중이 아닐 때만 일반 재생 상태 업데이트
+      if (queue.length === 0 || currentQueueIndex >= queue.length) {
+        setIsPlaying(playing)
+      } else {
+        // 큐 재생 중일 때는 신중하게 상태 업데이트
+        const currentItem = queue[currentQueueIndex]
+        if (currentItem?.type === "segment" && currentItem.segment) {
+          setIsPlaying(playing)
+        }
+      }
     },
   })
 
@@ -237,25 +249,29 @@ export default function YouTubeSegmentPlayerPage() {
     }
   }, [searchParams, loading])
 
-  // URL 자동 로드 - 탭 변경 중이 아닐 때만
-  const debouncedLoadVideo = useCallback(
-    debounce((url: string) => {
-      if (isValidYouTubeUrl(url) && !tabChangeRef.current) {
+  // URL 자동 로드 - 중복 방지 로직 강화
+  const handleVideoUrlChange = useCallback(
+    (url: string) => {
+      setVideoUrl(url)
+
+      // URL이 비어있거나 같은 URL이면 처리하지 않음
+      if (!url || url === lastProcessedUrlRef.current || isLoadingVideoRef.current) {
+        return
+      }
+
+      // 유효한 YouTube URL인지 확인
+      if (isValidYouTubeUrl(url)) {
         const videoId = extractVideoId(url)
-        if (videoId) {
-          console.log("URL에서 비디오 로드:", videoId)
+        if (videoId && videoId !== currentVideoId && !tabChangeRef.current) {
+          console.log("새 비디오 로드:", videoId)
+          lastProcessedUrlRef.current = url
+          isLoadingVideoRef.current = true
           loadVideo(videoId)
         }
       }
-    }, 1000),
-    [loadVideo],
+    },
+    [currentVideoId, loadVideo],
   )
-
-  useEffect(() => {
-    if (videoUrl && isYouTubeAPIReady && !tabChangeRef.current) {
-      debouncedLoadVideo(videoUrl)
-    }
-  }, [videoUrl, debouncedLoadVideo, isYouTubeAPIReady])
 
   // 검색 제안
   const debouncedGetSuggestions = useCallback(
@@ -286,23 +302,36 @@ export default function YouTubeSegmentPlayerPage() {
 
   // 큐 재생 모니터링 - 탭 변경 중이 아닐 때만
   useEffect(() => {
-    if (isPlaying && queue.length > 0 && isPlayerReady && !tabChangeRef.current) {
-      intervalRef.current = setInterval(() => {
-        const currentItem = queue[currentQueueIndex]
-        if (currentItem?.type === "segment" && currentItem.segment) {
-          const currentTime = getCurrentTime()
-          const fadeOutDuration = 3
+    // 큐 재생 중이고, 큐에 아이템이 있고, 플레이어가 준비되었고, 탭 변경 중이 아닐 때만 모니터링
+    if (isPlaying && queue.length > 0 && isPlayerReady && !tabChangeRef.current && currentQueueIndex < queue.length) {
+      const currentItem = queue[currentQueueIndex]
 
-          if (currentTime >= currentItem.segment.endTime - fadeOutDuration) {
-            fadeOutAndNext()
+      // 현재 아이템이 구간이고, 구간 데이터가 있을 때만 모니터링
+      if (currentItem?.type === "segment" && currentItem.segment) {
+        intervalRef.current = setInterval(() => {
+          try {
+            const currentTime = getCurrentTime()
+            const fadeOutDuration = 3
+
+            // 현재 시간이 구간 종료 시간에 도달했을 때만 다음으로 이동
+            if (currentTime >= currentItem.segment.endTime - fadeOutDuration && currentTime > 0) {
+              fadeOutAndNext()
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current)
+                intervalRef.current = null
+              }
+            }
+          } catch (error) {
+            console.error("큐 모니터링 오류:", error)
             if (intervalRef.current) {
               clearInterval(intervalRef.current)
               intervalRef.current = null
             }
           }
-        }
-      }, 1000)
+        }, 1000)
+      }
     } else {
+      // 조건에 맞지 않으면 인터벌 정리
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
         intervalRef.current = null
@@ -387,7 +416,9 @@ export default function YouTubeSegmentPlayerPage() {
         // 첫 번째 구간의 비디오 정보로 플레이어 설정
         if (project.segments && project.segments.length > 0) {
           const firstSegment = project.segments[0]
-          setVideoUrl(`https://www.youtube.com/watch?v=${firstSegment.videoId}`)
+          const url = `https://www.youtube.com/watch?v=${firstSegment.videoId}`
+          setVideoUrl(url)
+          lastProcessedUrlRef.current = url
         }
 
         // 큐에 데이터가 있으면 큐 탭을 활성화
@@ -517,7 +548,9 @@ export default function YouTubeSegmentPlayerPage() {
   }
 
   const loadSelectedVideo = (video: YouTubeVideo) => {
-    setVideoUrl(`https://www.youtube.com/watch?v=${video.id}`)
+    const url = `https://www.youtube.com/watch?v=${video.id}`
+    setVideoUrl(url)
+    lastProcessedUrlRef.current = url
     setShowSearchDialog(false)
     setSearchQuery("")
     setSearchResults([])
@@ -550,6 +583,12 @@ export default function YouTubeSegmentPlayerPage() {
 
   const handlePlaySegment = (segment: Segment) => {
     if (!tabChangeRef.current) {
+      // 기존 인터벌 정리
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+
       loadVideo(segment.videoId, segment.startTime, true)
     }
   }
@@ -682,6 +721,12 @@ export default function YouTubeSegmentPlayerPage() {
         variant: "destructive",
       })
       return
+    }
+
+    // 큐 재생 시작 시 인터벌 정리
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
     }
 
     setCurrentQueueIndex(0)
@@ -945,7 +990,7 @@ export default function YouTubeSegmentPlayerPage() {
         <div className="space-y-6">
           <YouTubePlayer
             videoUrl={videoUrl}
-            onVideoUrlChange={setVideoUrl}
+            onVideoUrlChange={handleVideoUrlChange}
             onSearchClick={() => setShowSearchDialog(true)}
             onSeekBy={seekBy}
             onSeekTo={seekToTime}
