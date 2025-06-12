@@ -249,7 +249,7 @@ export default function YouTubeSegmentPlayerPage() {
     }
   }, [searchParams, loading])
 
-  // URL 자동 로드 - 중복 방지 로직 강화
+  // URL 자동 로드 - 중복 방지 로직 강화 및 자동재생 방지
   const handleVideoUrlChange = useCallback(
     (url: string) => {
       setVideoUrl(url)
@@ -266,7 +266,8 @@ export default function YouTubeSegmentPlayerPage() {
           console.log("새 비디오 로드:", videoId)
           lastProcessedUrlRef.current = url
           isLoadingVideoRef.current = true
-          loadVideo(videoId)
+          // 자동재생 방지: autoplay를 false로 설정
+          loadVideo(videoId, 0, false)
         }
       }
     },
