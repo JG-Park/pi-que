@@ -47,6 +47,7 @@ import { useAuth } from "@/contexts/auth-context"
 import { usePlayer } from "@/contexts/player-context"
 import { useTheme } from "next-themes"
 import { extractVideoId, isValidYouTubeUrl, debounce, formatDate, generateId } from "@/lib/utils"
+import { PlaylistImport } from "./HomePage/components/PlaylistManager/PlaylistImport"
 import { useYouTubeAPI } from "@/hooks/use-youtube-api"
 import { useYouTubePlayer } from "@/hooks/use-youtube-player"
 import { useProject } from "@/hooks/use-project"
@@ -166,7 +167,7 @@ export default function YouTubeSegmentPlayerPage() {
       setVideoDuration(duration)
       setVideoTitle(title)
       setDuration(duration)
-      // 플레이어 컨텍스트에 현재 비디오 정보 업데이트
+      // 플레이어 컨텍스트에 현재 비디오 정보 업데이트 (정확한 제목으로)
       if (currentVideoId) {
         setCurrentVideo({
           id: currentVideoId,
@@ -287,12 +288,23 @@ export default function YouTubeSegmentPlayerPage() {
           console.log("새 비디오 로드:", videoId)
           lastProcessedUrlRef.current = url
           isLoadingVideoRef.current = true
+          
+          // 플레이어 컨텍스트에 새 비디오 정보 즉시 업데이트 (제목은 로드 후 설정)
+          setCurrentVideo({
+            id: videoId,
+            title: "로딩 중...",
+            url: url
+          })
+          
           // 자동재생 방지: autoplay를 false로 설정
           loadVideo(videoId, 0, false)
         }
+      } else {
+        // 유효하지 않은 URL인 경우 현재 비디오 정보 초기화
+        setCurrentVideo(null)
       }
     },
-    [currentVideoId, loadVideo],
+    [currentVideoId, loadVideo, setCurrentVideo],
   )
 
   // 검색 제안
@@ -747,6 +759,26 @@ export default function YouTubeSegmentPlayerPage() {
     })
   }
 
+  // 재생목록에서 비디오들을 큐에 일괄 추가
+  const handleImportPlaylistVideos = (videos: any[], playlistTitle: string) => {
+    videos.forEach((video, index) => {
+      const queueItem: QueueItem = {
+        id: video.id,
+        type: "description",
+        description: video.description,
+        orderIndex: queue.length + index,
+      }
+      addToQueue(queueItem)
+    })
+    
+    handleTabChange("queue")
+
+    toast({
+      title: "재생목록 가져오기 완료",
+      description: `"${playlistTitle}"에서 ${videos.length}개 영상을 큐에 추가했습니다.`,
+    })
+  }
+
   const playQueue = () => {
     if (queue.length === 0) {
       toast({
@@ -1088,6 +1120,7 @@ export default function YouTubeSegmentPlayerPage() {
                     </p>
                   </div>
                   <div className="flex gap-2">
+                    <PlaylistImport onImportVideos={handleImportPlaylistVideos} />
                     <Button size="sm" onClick={playQueue} disabled={queue.length === 0 || isInitializing}>
                       <Play className="w-4 h-4 mr-2" />큐 재생
                     </Button>
@@ -1285,6 +1318,7 @@ export default function YouTubeSegmentPlayerPage() {
                       </p>
                     </div>
                     <div className="flex gap-2">
+                      <PlaylistImport onImportVideos={handleImportPlaylistVideos} />
                       <Button size="sm" onClick={playQueue} disabled={queue.length === 0 || isInitializing}>
                         <Play className="w-4 h-4 mr-2" />큐 재생
                       </Button>
