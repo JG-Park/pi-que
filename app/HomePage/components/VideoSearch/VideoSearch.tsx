@@ -9,6 +9,7 @@ import { Separator } from '../../../../components/ui/separator'
 
 interface VideoSearchProps {
   onVideoSelect?: (video: YouTubeVideoInfo) => void
+  onVideoApply?: (url: string, description?: string) => void
   selectedVideoId?: string
   className?: string
 }
@@ -42,6 +43,7 @@ const searchYouTubeVideos = async (query: string, pageToken?: string): Promise<S
 
 const VideoSearch: React.FC<VideoSearchProps> = ({
   onVideoSelect,
+  onVideoApply,
   selectedVideoId,
   className = ''
 }) => {
@@ -84,10 +86,16 @@ const VideoSearch: React.FC<VideoSearchProps> = ({
     setSearchTerm(query)
   }, [])
 
-  // 비디오 선택 핸들러
+  // 비디오 선택 핸들러 - URL 적용 효과로 처리
   const handleVideoSelect = useCallback((video: YouTubeVideoInfo) => {
+    const videoUrl = `https://www.youtube.com/watch?v=${video.id}`
+    
+    // 기존 선택 콜백 호출
     onVideoSelect?.(video)
-  }, [onVideoSelect])
+    
+    // URL 적용 효과로 처리 (비디오 설명 포함)
+    onVideoApply?.(videoUrl, video.description)
+  }, [onVideoSelect, onVideoApply])
 
   // 더 많은 결과 로드 핸들러
   const handleLoadMore = useCallback(() => {

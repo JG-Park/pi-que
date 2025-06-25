@@ -1,12 +1,12 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Clock, Target, Youtube, Maximize2, Minimize2, Loader2 } from "lucide-react"
+import { Clock, Target, Youtube, Maximize2, Minimize2, Loader2, FileText, ChevronDown, ChevronUp } from "lucide-react"
 import { timeToSeconds } from "@/utils/time"
 
 interface YouTubePlayerProps {
@@ -20,6 +20,15 @@ interface YouTubePlayerProps {
   showControls: boolean
   isPlayerReady: boolean
   isInitializing: boolean
+  onApplyVideo?: (url: string, description?: string) => void
+}
+
+interface VideoInfo {
+  title: string
+  description: string
+  channelTitle: string
+  publishedAt: string
+  duration: string
 }
 
 export function YouTubePlayer({
@@ -33,8 +42,63 @@ export function YouTubePlayer({
   showControls,
   isPlayerReady,
   isInitializing,
+  onApplyVideo,
 }: YouTubePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [urlInput, setUrlInput] = useState(videoUrl)
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [isLoadingInfo, setIsLoadingInfo] = useState(false)
+  const [showDescription, setShowDescription] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // videoUrl이 변경되면 urlInput도 업데이트
+  useEffect(() => {
+    setUrlInput(videoUrl)
+  }, [videoUrl])
+
+  const extractVideoId = (url: string): string | null => {
+    const regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/
+    const match = url.match(regExp)
+    return (match && match[7]?.length === 11) ? match[7] : null
+  }
+
+  const fetchVideoInfo = async (url: string): Promise<VideoInfo | null> => {
+    const videoId = extractVideoId(url)
+    if (!videoId) return null
+
+    try {
+      const response = await fetch(`/api/youtube/video-info?videoId=${videoId}`)
+      if (response.ok) {
+        const data = await response.json()
+        return data.info
+      }
+    } catch (error) {
+      console.error('비디오 정보 가져오기 실패:', error)
+    }
+    return null
+  }
+
+  const handleApplyVideo = async () => {
+    if (!urlInput.trim()) return
+
+    setIsLoadingInfo(true)
+    setError(null)
+
+    try {
+      // 비디오 정보 가져오기
+      const info = await fetchVideoInfo(urlInput)
+      setVideoInfo(info)
+
+      // 부모 컴포넌트에 적용 알림
+      onVideoUrlChange(urlInput)
+      onApplyVideo?.(urlInput, info?.description)
+    } catch (err) {
+      setError('비디오 정보를 가져오는데 실패했습니다.')
+      console.error('비디오 적용 오류:', err)
+    } finally {
+      setIsLoadingInfo(false)
+    }
+  }
 
   const handleSeekToTime = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -69,17 +133,76 @@ export function YouTubePlayer({
       </CardHeader>
       <CardContent className="space-y-6">
         {showControls && (
-          <div className="flex gap-3">
-            <Input
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={videoUrl}
-              onChange={(e) => onVideoUrlChange(e.target.value)}
-              className="flex-1"
-            />
-            <Button onClick={onSearchClick} variant="outline">
-              <Youtube className="w-4 h-4 mr-2" />
-              YouTube에서 찾기
-            </Button>
+          <div className="space-y-4">
+            <div className="flex gap-3">
+              <Input
+                placeholder="https://www.youtube.com/watch?v=..."
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                className="flex-1"
+                onKeyDown={(e) => e.key === 'Enter' && handleApplyVideo()}
+              />
+              <Button 
+                onClick={handleApplyVideo} 
+                disabled={!urlInput.trim() || isLoadingInfo}
+                className="min-w-[80px]"
+              >
+                {isLoadingInfo ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  '적용'
+                )}
+              </Button>
+              <Button onClick={onSearchClick} variant="outline">
+                <Youtube className="w-4 h-4 mr-2" />
+                YouTube에서 찾기
+              </Button>
+            </div>
+
+            {error && (
+              <div className="text-sm text-red-600 bg-red-50 p-3 rounded-lg">
+                {error}
+              </div>
+            )}
+
+            {/* 비디오 정보 표시 */}
+            {videoInfo && (
+              <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="w-4 h-4" />
+                    <span className="font-medium text-sm">비디오 정보</span>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowDescription(!showDescription)}
+                    className="h-6 px-2"
+                  >
+                    {showDescription ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+                
+                <div>
+                  <h4 className="font-medium text-sm mb-1">{videoInfo.title}</h4>
+                  <p className="text-xs text-muted-foreground">
+                    {videoInfo.channelTitle} • {new Date(videoInfo.publishedAt).toLocaleDateString('ko-KR')}
+                  </p>
+                </div>
+
+                {showDescription && videoInfo.description && (
+                  <div className="border-t pt-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap max-h-32 overflow-y-auto">
+                      {videoInfo.description}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

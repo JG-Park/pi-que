@@ -216,7 +216,7 @@ export default function YouTubeSegmentPlayerPage() {
 
         // 큐 탭으로 변경 시 플레이어 상태 확인
         if (newTab === "queue" && !isPlayerReady && currentVideoId) {
-          console.log("큐 탭 활성화 - 플레이어 상태 확인 중...")
+          // console.log("큐 탭 활성화 - 플레이어 상태 확인 중...")
         }
       }
     },

@@ -1,10 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase"
 
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { visibility } = await request.json()
-    const projectId = params.id
+    const { id: projectId } = await params
     const supabase = createServerClient()
 
     // 사용자 인증 확인

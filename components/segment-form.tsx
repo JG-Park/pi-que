@@ -21,6 +21,8 @@ interface SegmentFormProps {
   onSeekTo: (seconds: number) => void
   isExpanded: boolean
   onToggleExpanded: () => void
+  selectedSegment?: Segment | null
+  onClearSelection?: () => void
 }
 
 export function SegmentForm({
@@ -32,6 +34,8 @@ export function SegmentForm({
   onSeekTo,
   isExpanded,
   onToggleExpanded,
+  selectedSegment,
+  onClearSelection,
 }: SegmentFormProps) {
   const [newSegment, setNewSegment] = useState({
     title: "",
@@ -46,16 +50,29 @@ export function SegmentForm({
   const lastVideoTitleRef = useRef<string>("")
   const lastVideoDurationRef = useRef<number>(0)
 
+  // 선택된 구간이 변경될 때 폼에 로드
+  useEffect(() => {
+    if (selectedSegment) {
+      setNewSegment({
+        title: selectedSegment.title,
+        description: selectedSegment.description || "",
+        startTime: `${Math.floor(selectedSegment.startTime / 60)}:${(selectedSegment.startTime % 60).toString().padStart(2, "0")}`,
+        endTime: `${Math.floor(selectedSegment.endTime / 60)}:${(selectedSegment.endTime % 60).toString().padStart(2, "0")}`,
+      })
+    }
+  }, [selectedSegment])
+
   // 영상이 변경될 때마다 폼 초기화 및 자동 입력
   useEffect(() => {
+    // 선택된 구간이 있으면 영상 변경 시에도 초기화하지 않음
+    if (selectedSegment) return
+
     // 비디오 ID가 변경되었거나, 제목이나 길이가 업데이트된 경우
     const videoChanged = currentVideoId && currentVideoId !== lastVideoIdRef.current
     const titleChanged = videoTitle && videoTitle !== lastVideoTitleRef.current
     const durationChanged = videoDuration > 0 && videoDuration !== lastVideoDurationRef.current
 
     if (videoChanged || titleChanged || durationChanged) {
-      console.log("영상 정보 변경 감지:", { videoChanged, titleChanged, durationChanged })
-
       // 참조값 업데이트
       lastVideoIdRef.current = currentVideoId
       lastVideoTitleRef.current = videoTitle
@@ -72,7 +89,7 @@ export function SegmentForm({
             : "",
       })
     }
-  }, [currentVideoId, videoTitle, videoDuration])
+  }, [currentVideoId, videoTitle, videoDuration, selectedSegment])
 
   const setCurrentTimeAsStart = () => {
     const currentTime = onGetCurrentTime()
@@ -133,7 +150,13 @@ export function SegmentForm({
     const startSeconds = timeToSeconds(newSegment.startTime)
     const endSeconds = timeToSeconds(newSegment.endTime)
 
-    const segment: Segment = {
+    const segment: Segment = selectedSegment ? {
+      ...selectedSegment,
+      title: newSegment.title,
+      description: newSegment.description,
+      startTime: startSeconds,
+      endTime: endSeconds,
+    } : {
       id: generateId(),
       title: newSegment.title,
       description: newSegment.description,
@@ -146,7 +169,12 @@ export function SegmentForm({
 
     onAddSegment(segment)
 
-    // 구간 추가 후 초기화 (현재 영상 정보로)
+    // 선택된 구간이 있었다면 선택 해제
+    if (selectedSegment && onClearSelection) {
+      onClearSelection()
+    }
+
+    // 구간 추가/수정 후 초기화 (현재 영상 정보로)
     setNewSegment({
       title: videoTitle || "",
       description: "",
@@ -160,7 +188,7 @@ export function SegmentForm({
 
     toast({
       title: "성공",
-      description: "구간이 추가되었습니다.",
+      description: selectedSegment ? "구간이 수정되었습니다." : "구간이 추가되었습니다.",
     })
   }
 
@@ -168,12 +196,21 @@ export function SegmentForm({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
         <div>
-          <CardTitle>구간 추가</CardTitle>
-          <CardDescription>현재 영상에서 구간을 만드세요</CardDescription>
+          <CardTitle>{selectedSegment ? "구간 편집" : "구간 추가"}</CardTitle>
+          <CardDescription>
+            {selectedSegment ? `"${selectedSegment.title}" 구간을 편집 중입니다` : "현재 영상에서 구간을 만드세요"}
+          </CardDescription>
         </div>
-        <Button variant="ghost" size="icon" onClick={onToggleExpanded}>
-          {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
-        </Button>
+        <div className="flex items-center gap-2">
+          {selectedSegment && onClearSelection && (
+            <Button variant="outline" size="sm" onClick={onClearSelection}>
+              선택 해제
+            </Button>
+          )}
+          <Button variant="ghost" size="icon" onClick={onToggleExpanded}>
+            {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+          </Button>
+        </div>
       </CardHeader>
       {isExpanded && (
         <CardContent className="space-y-4 pt-0">
@@ -258,7 +295,7 @@ export function SegmentForm({
 
           <Button onClick={handleAddSegment} className="w-full" size="lg">
             <Plus className="w-4 h-4 mr-2" />
-            구간 추가
+            {selectedSegment ? "구간 수정" : "구간 추가"}
           </Button>
         </CardContent>
       )}

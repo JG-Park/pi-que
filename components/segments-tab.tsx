@@ -14,6 +14,7 @@ interface SegmentsTabProps {
   segments: Segment[]
   onPlaySegment: (segment: Segment) => void
   onEditSegment: (segment: Segment) => void
+  onSelectSegment?: (segment: Segment) => void
   onAddToQueue: (segment: Segment) => void
   onRemoveSegment: (segmentId: string) => void
   onReorderSegments: (segments: Segment[]) => void
@@ -25,6 +26,7 @@ export function SegmentsTab({
   segments,
   onPlaySegment,
   onEditSegment,
+  onSelectSegment,
   onAddToQueue,
   onRemoveSegment,
   onReorderSegments,
@@ -181,6 +183,12 @@ export function SegmentsTab({
                     <Button size="sm" variant="outline" onClick={() => onEditSegment(segment)} title="편집">
                       <Edit className="w-4 h-4" />
                     </Button>
+                    {onSelectSegment && (
+                      <Button size="sm" variant="outline" onClick={() => onSelectSegment(segment)} title="편집 탭에 로드">
+                        <Edit className="w-4 h-4" />
+                        로드
+                      </Button>
+                    )}
                     <Button size="sm" onClick={() => onAddToQueue(segment)} title="큐에 추가">
                       <Plus className="w-4 h-4" />
                     </Button>

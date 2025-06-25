@@ -96,11 +96,26 @@ const SegmentForm: React.FC<SegmentFormProps> = ({
   // 현재 비디오나 시간이 변경될 때 폼 업데이트
   useEffect(() => {
     if (!segment && state.currentVideo) {
-      setValue('title', `${state.currentVideo.title} 구간`);
+      // 비디오가 변경되면 폼을 완전히 리셋하고 새로운 값들로 설정
+      const newValues = {
+        title: `${state.currentVideo.title} 구간`,
+        description: '',
+        startTime: TimeFormatter.secondsToTime(currentTime || state.currentTime),
+        endTime: TimeFormatter.secondsToTime((currentTime || state.currentTime) + 30),
+        tags: ''
+      };
+      
+      reset(newValues);
+    }
+  }, [segment, state.currentVideo?.id, state.currentTime, currentTime, reset]);
+
+  // 시간만 변경될 때는 시간 필드만 업데이트 (비디오 변경이 아닌 경우)
+  useEffect(() => {
+    if (!segment && state.currentVideo && (currentTime || state.currentTime)) {
       setValue('startTime', TimeFormatter.secondsToTime(currentTime || state.currentTime));
       setValue('endTime', TimeFormatter.secondsToTime((currentTime || state.currentTime) + 30));
     }
-  }, [segment, state.currentVideo, state.currentTime, currentTime, setValue]);
+  }, [currentTime, state.currentTime, segment, state.currentVideo, setValue]);
 
   const handleFormSubmit = async (data: SegmentFormData) => {
     try {

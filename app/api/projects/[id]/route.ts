@@ -1,9 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient, type Segment, type QueueItem } from "@/lib/supabase"
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const projectId = params.id
+    const { id: projectId } = await params
     const supabase = createServerClient()
 
     console.log("프로젝트 상세 조회:", projectId)
@@ -109,6 +109,100 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       {
         success: false,
         error: "Failed to load project",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 },
+    )
+  }
+}
+
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id: projectId } = await params
+    const supabase = createServerClient()
+
+    // 사용자 인증 확인
+    const authHeader = request.headers.get("authorization")
+    if (!authHeader) {
+      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 })
+    }
+
+    const token = authHeader.replace("Bearer ", "")
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser(token)
+
+    if (authError || !user) {
+      console.error("인증 오류:", authError)
+      return NextResponse.json({ success: false, error: "Authentication failed" }, { status: 401 })
+    }
+
+    const userId = user.id
+
+    console.log("프로젝트 삭제 시작 - 사용자:", user.email, "프로젝트:", projectId)
+
+    // 프로젝트 소유자 확인
+    const { data: project, error: checkError } = await supabase
+      .from("projects")
+      .select("id, title, owner_id")
+      .eq("id", projectId)
+      .eq("owner_id", userId)
+      .single()
+
+    if (checkError || !project) {
+      console.error("프로젝트 소유자 확인 오류:", checkError)
+      return NextResponse.json({ success: false, error: "Project not found or access denied" }, { status: 404 })
+    }
+
+    // 먼저 관련된 큐 아이템들 삭제
+    const { error: queueError } = await supabase
+      .from("queue_items")
+      .delete()
+      .eq("project_id", projectId)
+
+    if (queueError) {
+      console.error("큐 아이템 삭제 오류:", queueError)
+    }
+
+    // 관련된 구간들 삭제
+    const { error: segmentError } = await supabase
+      .from("segments")
+      .delete()
+      .eq("project_id", projectId)
+
+    if (segmentError) {
+      console.error("구간 삭제 오류:", segmentError)
+    }
+
+    // 마지막으로 프로젝트 삭제
+    const { error: deleteError } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId)
+      .eq("owner_id", userId)
+
+    if (deleteError) {
+      console.error("프로젝트 삭제 오류:", deleteError)
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Failed to delete project",
+          details: deleteError.message,
+        },
+        { status: 500 },
+      )
+    }
+
+    console.log("프로젝트 삭제 성공:", project.title)
+
+    return NextResponse.json({ success: true, message: "Project deleted successfully" })
+  } catch (error) {
+    console.error("프로젝트 삭제 전체 오류:", error)
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Failed to delete project",
         details: error instanceof Error ? error.message : "Unknown error",
       },
       { status: 500 },

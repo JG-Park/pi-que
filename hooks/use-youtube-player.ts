@@ -139,7 +139,7 @@ export function useYouTubePlayer({ isAPIReady, onVideoReady, onStateChange, onPr
                     } catch (error) {
                       console.error("시간 추적 오류:", error)
                     }
-                  }, 1000)
+                  }, 200) // 200ms마다 체크로 더 정확한 시간 추적
                 } else {
                   // 재생이 중지되면 progress tracking 중지
                   if (progressIntervalRef.current) {
@@ -272,7 +272,9 @@ export function useYouTubePlayer({ isAPIReady, onVideoReady, onStateChange, onPr
 
   const getCurrentTime = useCallback(() => {
     const time = safePlayerCall("getCurrentTime")
-    return typeof time === "number" ? Math.floor(time) : 0
+    const result = typeof time === "number" ? Math.floor(time) : 0
+    // console.log('⏱️ [GET_TIME] 현재 시간 가져오기:', result, '(원본:', time, ')')
+    return result
   }, [safePlayerCall])
 
   const playVideo = useCallback(() => {
