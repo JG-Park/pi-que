@@ -15,6 +15,7 @@ import {
   Share2,
   MessageSquare,
   Edit,
+  Edit2,
   Save,
   X,
   AlertTriangle,
@@ -37,11 +38,13 @@ import {
   CheckCircle,
   ChevronUp,
   ChevronDown,
+  Presentation,
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { useRouter, useSearchParams } from "next/navigation"
 import { UserProfile } from "@/components/user-profile"
 import { useAuth } from "@/contexts/auth-context"
+import { usePlayer } from "@/contexts/player-context"
 import { useTheme } from "next-themes"
 import { extractVideoId, isValidYouTubeUrl, debounce, formatDate, generateId } from "@/lib/utils"
 import { useYouTubeAPI } from "@/hooks/use-youtube-api"
@@ -57,6 +60,7 @@ export default function YouTubeSegmentPlayerPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { session, user, loading } = useAuth()
+  const { state: playerState, setCurrentVideo, setCurrentTime, setDuration } = usePlayer()
   const { theme, setTheme } = useTheme()
 
   // YouTube API 및 플레이어
@@ -108,6 +112,10 @@ export default function YouTubeSegmentPlayerPage() {
   const [isDescriptionFormExpanded, setIsDescriptionFormExpanded] = useState(false)
   const [isPlayerMaximized, setIsPlayerMaximized] = useState(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
+  
+  // 앱 모드 관리
+  const [appMode, setAppMode] = useState<'edit' | 'presentation'>('edit')
+  const [isQueuePlayActive, setIsQueuePlayActive] = useState(false)
 
   // 검색 관련
   const [searchQuery, setSearchQuery] = useState("")
@@ -157,7 +165,20 @@ export default function YouTubeSegmentPlayerPage() {
     onVideoReady: (duration, title) => {
       setVideoDuration(duration)
       setVideoTitle(title)
+      setDuration(duration)
+      // 플레이어 컨텍스트에 현재 비디오 정보 업데이트
+      if (currentVideoId) {
+        setCurrentVideo({
+          id: currentVideoId,
+          title: title,
+          url: videoUrl
+        })
+      }
       isLoadingVideoRef.current = false
+    },
+    onProgress: (currentTime) => {
+      // 플레이어 컨텍스트 시간 업데이트
+      setCurrentTime(currentTime)
     },
     onStateChange: (playing) => {
       // 큐 재생 중이 아닐 때만 일반 재생 상태 업데이트
@@ -301,10 +322,10 @@ export default function YouTubeSegmentPlayerPage() {
     }
   }, [searchQuery, showSearchDialog, debouncedGetSuggestions])
 
-  // 큐 재생 모니터링 - 탭 변경 중이 아닐 때만
+  // 큐 재생 모니터링 - 의도적인 큐 재생일 때만
   useEffect(() => {
-    // 큐 재생 중이고, 큐에 아이템이 있고, 플레이어가 준비되었고, 탭 변경 중이 아닐 때만 모니터링
-    if (isPlaying && queue.length > 0 && isPlayerReady && !tabChangeRef.current && currentQueueIndex < queue.length) {
+    // 큐 재생이 활성화되고, 큐에 아이템이 있고, 플레이어가 준비되었고, 탭 변경 중이 아닐 때만 모니터링
+    if (isQueuePlayActive && isPlaying && queue.length > 0 && isPlayerReady && !tabChangeRef.current && currentQueueIndex < queue.length) {
       const currentItem = queue[currentQueueIndex]
 
       // 현재 아이템이 구간이고, 구간 데이터가 있을 때만 모니터링
@@ -313,9 +334,12 @@ export default function YouTubeSegmentPlayerPage() {
           try {
             const currentTime = getCurrentTime()
             const fadeOutDuration = 3
+            
+            // 플레이어 컨텍스트 시간 업데이트
+            setCurrentTime(currentTime)
 
             // 현재 시간이 구간 종료 시간에 도달했을 때만 다음으로 이동
-            if (currentTime >= currentItem.segment.endTime - fadeOutDuration && currentTime > 0) {
+            if (currentItem.segment && currentTime >= currentItem.segment.endTime - fadeOutDuration && currentTime > 0) {
               fadeOutAndNext()
               if (intervalRef.current) {
                 clearInterval(intervalRef.current)
@@ -344,7 +368,7 @@ export default function YouTubeSegmentPlayerPage() {
         clearInterval(intervalRef.current)
       }
     }
-  }, [isPlaying, currentQueueIndex, queue, isPlayerReady, getCurrentTime])
+  }, [isQueuePlayActive, isPlaying, currentQueueIndex, queue, isPlayerReady, getCurrentTime])
 
   // API 오류 처리
   useEffect(() => {
@@ -491,14 +515,15 @@ export default function YouTubeSegmentPlayerPage() {
       const data = await response.json()
 
       if (data.success) {
+        const results = data.data?.items || []
         if (append) {
           const existingIds = new Set(searchResults.map((v) => v.id))
-          const newResults = data.results.filter((v: YouTubeVideo) => !existingIds.has(v.id))
+          const newResults = results.filter((v: YouTubeVideo) => !existingIds.has(v.id))
           setSearchResults((prev) => [...prev, ...newResults])
         } else {
-          setSearchResults(data.results)
+          setSearchResults(results)
         }
-        setHasMoreResults(data.results.length === 20)
+        setHasMoreResults(results.length === 20)
 
         if (data.fallback && !append) {
           toast({
@@ -551,7 +576,12 @@ export default function YouTubeSegmentPlayerPage() {
   const loadSelectedVideo = (video: YouTubeVideo) => {
     const url = `https://www.youtube.com/watch?v=${video.id}`
     setVideoUrl(url)
-    lastProcessedUrlRef.current = url
+    
+    // 강제로 새 영상을 로드하기 위해 ref를 리셋하고 handleVideoUrlChange 호출
+    lastProcessedUrlRef.current = ""
+    isLoadingVideoRef.current = false
+    handleVideoUrlChange(url)
+    
     setShowSearchDialog(false)
     setSearchQuery("")
     setSearchResults([])
@@ -584,6 +614,9 @@ export default function YouTubeSegmentPlayerPage() {
 
   const handlePlaySegment = (segment: Segment) => {
     if (!tabChangeRef.current) {
+      // 개별 구간 재생 시 큐 재생 모드 비활성화
+      setIsQueuePlayActive(false)
+      
       // 기존 인터벌 정리
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
@@ -724,6 +757,9 @@ export default function YouTubeSegmentPlayerPage() {
       return
     }
 
+    // 큐 재생 모드 활성화
+    setIsQueuePlayActive(true)
+    
     // 큐 재생 시작 시 인터벌 정리
     if (intervalRef.current) {
       clearInterval(intervalRef.current)
@@ -733,7 +769,8 @@ export default function YouTubeSegmentPlayerPage() {
     setCurrentQueueIndex(0)
     const firstItem = queue[0]
     if (firstItem.type === "segment" && firstItem.segment) {
-      handlePlaySegment(firstItem.segment)
+      // 큐 재생의 첫 번째 아이템이므로 handlePlaySegment를 사용하지 않고 직접 로드
+      loadVideo(firstItem.segment.videoId, firstItem.segment.startTime, true)
     } else if (firstItem.type === "segment" && !firstItem.segment) {
       toast({
         title: "재생 불가",
@@ -773,11 +810,17 @@ export default function YouTubeSegmentPlayerPage() {
         setTimeout(() => playNextInQueue(), 3000)
       }
     } else {
+      // 큐 재생 완료 시 모드 비활성화
+      setIsQueuePlayActive(false)
       setIsPlaying(false)
-      toast({
-        title: "완료",
-        description: "모든 구간 재생이 완료되었습니다.",
-      })
+      
+      // 프레젠테이션 모드에서만 완료 메시지 표시
+      if (appMode === 'presentation') {
+        toast({
+          title: "완료",
+          description: "모든 구간 재생이 완료되었습니다.",
+        })
+      }
     }
   }
 
@@ -969,7 +1012,7 @@ export default function YouTubeSegmentPlayerPage() {
     )
   }
 
-  const showEditingUI = activeTab !== "queue"
+  const showEditingUI = appMode === 'edit'
 
   return (
     <div className="container mx-auto p-6 max-w-7xl pb-32">
@@ -980,13 +1023,157 @@ export default function YouTubeSegmentPlayerPage() {
           {isInitializing && <p className="text-sm text-amber-600 mt-1">플레이어 초기화 중...</p>}
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <Button
+              variant={appMode === 'edit' ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setAppMode('edit')
+                if (isQueuePlayActive) {
+                  setIsQueuePlayActive(false)
+                  pauseVideo()
+                }
+              }}
+            >
+              <Edit2 className="w-4 h-4 mr-2" />
+              편집
+            </Button>
+            <Button
+              variant={appMode === 'presentation' ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAppMode('presentation')}
+            >
+              <Presentation className="w-4 h-4 mr-2" />
+              발표
+            </Button>
+          </div>
           <Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </Button>
         </div>
       </div>
 
-      <div className={`grid gap-8 ${isPlayerMaximized ? "grid-cols-[1fr_300px]" : "grid-cols-1 lg:grid-cols-2"}`}>
+      {appMode === 'presentation' ? (
+        // 발표 모드: 플레이어와 재생 큐만 표시
+        <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
+          <div className="space-y-6">
+            <YouTubePlayer
+              videoUrl={videoUrl}
+              onVideoUrlChange={handleVideoUrlChange}
+              onSearchClick={() => setShowSearchDialog(true)}
+              onSeekBy={seekBy}
+              onSeekTo={seekToTime}
+              isMaximized={false}
+              onToggleMaximize={() => {}}
+              showControls={false}
+              isPlayerReady={isPlayerReady}
+              isInitializing={isInitializing}
+            />
+          </div>
+          
+          <div className="space-y-6">
+            {/* 재생 큐만 표시 */}
+            <div className="bg-card rounded-lg border h-[800px]">
+              <div className="p-6 border-b">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold">재생 큐</h3>
+                    <p className="text-sm text-muted-foreground">
+                      총 {queue.length}개 항목
+                      {queue.length > 0 && (
+                        <span className="ml-2">
+                          (현재: {currentQueueIndex + 1} / {queue.length})
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={playQueue} disabled={queue.length === 0 || isInitializing}>
+                      <Play className="w-4 h-4 mr-2" />큐 재생
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={playNextInQueue}
+                      disabled={queue.length === 0 || isInitializing}
+                    >
+                      <SkipForward className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <div className="p-6">
+                <div className="space-y-3 overflow-y-auto max-h-[700px]">
+                  {queue.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className={`border rounded-lg p-4 transition-all cursor-pointer ${
+                        index === currentQueueIndex ? "bg-primary/10 border-primary shadow-md" : "hover:bg-muted/50"
+                      }`}
+                      onClick={() =>
+                        item.type === "segment" && item.segment && !isInitializing && playQueueItem(index)
+                      }
+                    >
+                      <div className="flex items-start gap-3">
+                        <Badge
+                          variant={index === currentQueueIndex ? "default" : "secondary"}
+                          className="mt-0.5 min-w-[2rem] justify-center"
+                        >
+                          {index + 1}
+                        </Badge>
+                        <div className="flex-1 min-w-0">
+                          {item.type === "segment" && item.segment ? (
+                            <>
+                              <div className="font-medium truncate">{item.segment.title}</div>
+                              <div className="text-sm text-muted-foreground">
+                                {secondsToTime(item.segment.startTime)} - {secondsToTime(item.segment.endTime)}
+                                <span className="ml-2 text-xs">
+                                  ({secondsToTime(item.segment.endTime - item.segment.startTime)})
+                                </span>
+                              </div>
+                              {item.segment.description && (
+                                <div className="text-sm text-muted-foreground mt-1 italic line-clamp-2">
+                                  {item.segment.description}
+                                </div>
+                              )}
+                            </>
+                          ) : item.type === "segment" && !item.segment ? (
+                            <div className="flex items-start gap-2">
+                              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                              <div>
+                                <div className="font-medium text-amber-600">구간 데이터 없음</div>
+                                <div className="text-sm text-muted-foreground">
+                                  이 구간의 데이터를 찾을 수 없습니다.
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-start gap-2">
+                              <MessageSquare className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                              <div className="text-sm text-muted-foreground italic break-words">
+                                {item.description}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {queue.length === 0 && (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <MessageSquare className="w-12 h-12 mx-auto mb-4 opacity-30" />
+                      <p>재생 큐가 비어있습니다.</p>
+                      <p className="text-sm mt-1">편집 모드에서 구간을 추가해주세요.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        // 편집 모드: 기존 전체 UI
+        <div className={`grid gap-8 ${isPlayerMaximized ? "grid-cols-[1fr_300px]" : "grid-cols-1 lg:grid-cols-2"}`}>
         {/* 왼쪽: 영상 플레이어 및 컨트롤 */}
         <div className="space-y-6">
           <YouTubePlayer
@@ -1195,7 +1382,8 @@ export default function YouTubeSegmentPlayerPage() {
             </TabsContent>
           </Tabs>
         </div>
-      </div>
+        </div>
+      )}
 
       {/* 하단 고정 컨트롤 바 */}
       <div className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-t z-50">
@@ -1260,6 +1448,31 @@ export default function YouTubeSegmentPlayerPage() {
                   )}
                 </div>
               )}
+              {/* 앱 모드 전환 버튼 */}
+              <div className="flex items-center gap-1 ml-4 px-3 py-1 border rounded-md">
+                <Button
+                  size="sm"
+                  variant={appMode === 'edit' ? 'default' : 'ghost'}
+                  onClick={() => {
+                    setAppMode('edit')
+                    setIsQueuePlayActive(false) // 편집 모드로 전환 시 큐 재생 비활성화
+                  }}
+                  className="h-7 px-2"
+                >
+                  <Edit className="w-3 h-3 mr-1" />
+                  편집
+                </Button>
+                <Button
+                  size="sm"
+                  variant={appMode === 'presentation' ? 'default' : 'ghost'}
+                  onClick={() => setAppMode('presentation')}
+                  className="h-7 px-2"
+                >
+                  <Play className="w-3 h-3 mr-1" />
+                  발표
+                </Button>
+              </div>
+              
               {currentProjectId && (
                 <Badge variant="secondary" className="text-xs">
                   ID: {currentProjectId.slice(0, 8)}...
@@ -1417,7 +1630,7 @@ export default function YouTubeSegmentPlayerPage() {
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[60vh] overflow-y-auto"
               onScroll={handleScrollSearch}
             >
-              {searchResults.map((video) => (
+              {searchResults && searchResults.length > 0 && searchResults.map((video) => (
                 <div
                   key={video.id}
                   className="border rounded-lg p-4 hover:bg-muted/50 cursor-pointer transition-colors"

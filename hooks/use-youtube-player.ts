@@ -7,17 +7,23 @@ interface UseYouTubePlayerOptions {
   isAPIReady: boolean
   onVideoReady?: (duration: number, title: string) => void
   onStateChange?: (isPlaying: boolean) => void
+  onProgress?: (currentTime: number) => void
 }
 
-export function useYouTubePlayer({ isAPIReady, onVideoReady, onStateChange }: UseYouTubePlayerOptions) {
+export function useYouTubePlayer({ isAPIReady, onVideoReady, onStateChange, onProgress }: UseYouTubePlayerOptions) {
   const playerRef = useRef<any>(null)
   const [currentVideoId, setCurrentVideoId] = useState("")
   const [isPlayerReady, setIsPlayerReady] = useState(false)
   const [isInitializing, setIsInitializing] = useState(false)
   const containerCheckRef = useRef<NodeJS.Timeout | null>(null)
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // 플레이어 완전 제거
   const destroyPlayer = useCallback(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current)
+      progressIntervalRef.current = null
+    }
     if (playerRef.current) {
       try {
         if (typeof playerRef.current.destroy === "function") {
@@ -118,6 +124,29 @@ export function useYouTubePlayer({ isAPIReady, onVideoReady, onStateChange }: Us
               try {
                 const isPlaying = event.data === window.YT.PlayerState.PLAYING
                 onStateChange?.(isPlaying)
+                
+                // 재생 중일 때 progress tracking 시작
+                if (isPlaying && onProgress) {
+                  if (progressIntervalRef.current) {
+                    clearInterval(progressIntervalRef.current)
+                  }
+                  progressIntervalRef.current = setInterval(() => {
+                    try {
+                      if (playerRef.current && typeof playerRef.current.getCurrentTime === "function") {
+                        const currentTime = playerRef.current.getCurrentTime()
+                        onProgress(currentTime)
+                      }
+                    } catch (error) {
+                      console.error("시간 추적 오류:", error)
+                    }
+                  }, 1000)
+                } else {
+                  // 재생이 중지되면 progress tracking 중지
+                  if (progressIntervalRef.current) {
+                    clearInterval(progressIntervalRef.current)
+                    progressIntervalRef.current = null
+                  }
+                }
               } catch (error) {
                 console.error("상태 변경 처리 오류:", error)
               }

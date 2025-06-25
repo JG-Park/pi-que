@@ -1,9 +1,7 @@
 import type React from "react"
 import type { Metadata } from "next"
 import "./globals.css"
-import { AuthProvider } from "@/contexts/auth-context"
-import { ThemeProvider } from "@/components/theme-provider"
-import { Toaster } from "@/components/ui/toaster"
+import { Providers } from './providers'
 
 export const metadata: Metadata = {
   title: "Pi Que. - YouTube 구간 편집기",
@@ -27,12 +25,9 @@ export default function RootLayout({
         />
       </head>
       <body className="font-pretendard">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <AuthProvider>
-            {children}
-            <Toaster />
-          </AuthProvider>
-        </ThemeProvider>
+        <Providers>
+          {children}
+        </Providers>
       </body>
     </html>
   )

@@ -9,9 +9,15 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, suggestions: [] })
     }
 
-    const apiKey = process.env.YOUTUBE_API_KEY
+    const apiKey = process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || process.env.YOUTUBE_API_KEY
     if (!apiKey) {
-      return NextResponse.json({ success: false, error: "YouTube API key not configured" }, { status: 500 })
+      console.log('YouTube API key not configured, using mock suggestions');
+      // API 키가 없어도 기본 제안어를 반환
+      const defaultSuggestions = ["music", "tutorial", "review", "gameplay", "news", "comedy", "education", "technology"]
+        .filter((s) => s.toLowerCase().includes(query.toLowerCase()))
+        .slice(0, 5);
+      
+      return NextResponse.json({ success: true, suggestions: defaultSuggestions, mockData: true });
     }
 
     // YouTube 검색 제안 API 호출

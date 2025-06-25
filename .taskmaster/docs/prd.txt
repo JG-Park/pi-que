@@ -1,0 +1,172 @@
+# YouTube Segment Player - 대규모 리팩토링 PRD
+
+## 1. 프로젝트 개요
+YouTube Segment Player는 YouTube 비디오의 특정 구간을 세그먼트로 저장하고 재생 큐를 통해 순차적으로 재생할 수 있는 웹 애플리케이션입니다. 현재 코드가 과도하게 집중화되어 있어 유지보수성과 확장성이 크게 저해되고 있습니다.
+
+## 2. 현재 문제점
+- app/page.tsx 파일이 1,531줄로 과도하게 방대함
+- 모든 상태 관리가 단일 컴포넌트에 집중됨
+- 비즈니스 로직과 UI 로직이 뒤섞여 있음
+- 컴포넌트 간 강한 결합도로 인한 수정의 어려움
+- 테스트 가능성 부족
+- 재사용 가능한 컴포넌트 부족
+
+## 3. 리팩토링 목표
+### 3.1 아키텍처 개선
+- 관심사 분리 (Separation of Concerns)
+- 단일 책임 원칙 (Single Responsibility Principle) 적용
+- 의존성 역전 (Dependency Inversion) 적용
+- 컴포넌트 재사용성 극대화
+
+### 3.2 코드 구조 개선
+- 페이지 컴포넌트를 여러 개의 작은 컴포넌트로 분할
+- 상태 관리 로직을 별도 훅으로 분리
+- 비즈니스 로직을 서비스 레이어로 분리
+- API 호출을 별도 레이어로 분리
+
+### 3.3 성능 최적화
+- 불필요한 리렌더링 방지
+- 코드 스플리팅 적용
+- 메모이제이션 최적화
+
+## 4. 새로운 아키텍처 구조
+
+### 4.1 컴포넌트 계층 구조
+```
+pages/
+├── HomePage/
+│   ├── index.tsx                  # 페이지 진입점
+│   ├── HomePage.tsx              # 메인 레이아웃
+│   └── components/
+│       ├── VideoPlayer/
+│       │   ├── VideoPlayer.tsx
+│       │   ├── VideoControls.tsx
+│       │   └── VideoInfo.tsx
+│       ├── SegmentManager/
+│       │   ├── SegmentList.tsx
+│       │   ├── SegmentForm.tsx
+│       │   └── SegmentItem.tsx
+│       ├── QueueManager/
+│       │   ├── QueueList.tsx
+│       │   └── QueueItem.tsx
+│       ├── VideoSearch/
+│       │   ├── SearchInput.tsx
+│       │   ├── SearchResults.tsx
+│       │   └── SearchItem.tsx
+│       └── ProjectManager/
+│           ├── ProjectInfo.tsx
+│           ├── ProjectSettings.tsx
+│           └── ProjectActions.tsx
+```
+
+### 4.2 훅 구조
+```
+hooks/
+├── core/
+│   ├── use-youtube-player.ts     # 기존 유지, 개선
+│   ├── use-youtube-api.ts        # 기존 유지, 개선
+│   └── use-project.ts            # 기존 유지, 개선
+├── business/
+│   ├── use-video-search.ts       # 비디오 검색 로직
+│   ├── use-segment-manager.ts    # 세그먼트 관리 로직
+│   ├── use-queue-manager.ts      # 큐 관리 로직
+│   └── use-auto-save.ts          # 자동 저장 로직
+└── ui/
+    ├── use-modal.ts              # 모달 상태 관리
+    ├── use-form-state.ts         # 폼 상태 관리
+    └── use-scroll.ts             # 스크롤 관련 로직
+```
+
+### 4.3 서비스 레이어
+```
+services/
+├── youtube/
+│   ├── youtube-api.service.ts    # YouTube API 서비스
+│   ├── video-search.service.ts   # 비디오 검색 서비스
+│   └── youtube-player.service.ts # 플레이어 제어 서비스
+├── project/
+│   ├── project.service.ts        # 프로젝트 CRUD
+│   ├── segment.service.ts        # 세그먼트 관리
+│   └── queue.service.ts          # 큐 관리
+└── storage/
+    ├── supabase.service.ts       # Supabase 클라이언트
+    └── local-storage.service.ts  # 로컬 스토리지 관리
+```
+
+### 4.4 유틸리티 및 도우미
+```
+utils/
+├── time/
+│   ├── time-formatter.ts         # 기존 시간 유틸 개선
+│   └── time-validator.ts         # 시간 검증 로직
+├── video/
+│   ├── video-url-parser.ts       # YouTube URL 파싱
+│   └── video-validator.ts        # 비디오 검증
+└── common/
+    ├── debounce.ts               # 디바운스 유틸
+    ├── id-generator.ts           # ID 생성 유틸
+    └── error-handler.ts          # 에러 핸들링
+```
+
+## 5. 기술적 요구사항
+
+### 5.1 사용 기술 스택 (현재 유지)
+- Next.js 15 (App Router)
+- React 19
+- TypeScript
+- Tailwind CSS
+- Radix UI
+- Supabase
+- Zod (검증)
+
+### 5.2 추가 도구
+- React.memo, useMemo, useCallback 적극 활용
+- React.lazy를 통한 코드 스플리팅
+- Custom hooks을 통한 로직 분리
+- Context API 최적화
+
+### 5.3 코딩 표준
+- 각 컴포넌트는 200줄 이하로 제한
+- 각 함수는 50줄 이하로 제한
+- 단일 책임 원칙 엄격 적용
+- PropTypes 대신 TypeScript 활용
+- 에러 바운더리 구현
+
+## 6. 마이그레이션 전략
+
+### 6.1 단계별 접근법
+1. **1단계**: 기존 코드 분석 및 종속성 매핑
+2. **2단계**: 공통 유틸리티 및 서비스 레이어 구축
+3. **3단계**: 훅 레이어 구축 및 기존 훅 개선
+4. **4단계**: 컴포넌트 분할 및 재구성
+5. **5단계**: 상태 관리 최적화
+6. **6단계**: 성능 최적화 및 테스트 추가
+7. **7단계**: 최종 검증 및 정리
+
+### 6.2 백워드 호환성
+- 기존 API 인터페이스 유지
+- 데이터 구조 호환성 보장
+- 점진적 마이그레이션으로 서비스 중단 방지
+
+## 7. 성공 지표
+- 메인 페이지 컴포넌트를 200줄 이하로 축소
+- 컴포넌트 개수를 최소 10개 이상으로 분할
+- 재사용 가능한 훅 8개 이상 생성
+- 서비스 레이어 5개 이상 구축
+- 번들 크기 20% 이상 감소
+- 페이지 로딩 속도 30% 이상 개선
+
+## 8. 위험 요소 및 대응책
+- **위험**: 기존 기능 손실
+  **대응**: 철저한 테스트 및 점진적 마이그레이션
+- **위험**: 성능 저하
+  **대응**: 각 단계별 성능 모니터링
+- **위험**: 일정 지연
+  **대응**: 우선순위 기반 단계별 진행
+
+## 9. 추가 개선 사항
+- 에러 핸들링 체계 구축
+- 로딩 상태 관리 개선
+- 접근성(a11y) 개선
+- SEO 최적화
+- PWA 기능 추가 검토 

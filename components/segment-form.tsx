@@ -39,6 +39,7 @@ export function SegmentForm({
     startTime: "0:00",
     endTime: "",
   })
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false)
 
   const titleInputRef = useRef<HTMLInputElement>(null)
   const lastVideoIdRef = useRef<string>("")
@@ -188,14 +189,31 @@ export function SegmentForm({
           </div>
 
           <div>
-            <Label htmlFor="segment-description">구간 설명</Label>
-            <Textarea
-              id="segment-description"
-              placeholder="구간에 대한 설명을 입력하세요"
-              value={newSegment.description}
-              onChange={(e) => setNewSegment((prev) => ({ ...prev, description: e.target.value }))}
-              rows={3}
-            />
+            <div className="flex items-center justify-between">
+              <Label htmlFor="segment-description">구간 설명 (선택사항)</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsDescriptionExpanded(!isDescriptionExpanded)}
+                className="h-auto p-1 text-gray-500 hover:text-gray-700"
+              >
+                {isDescriptionExpanded ? (
+                  <ChevronUp className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            {isDescriptionExpanded && (
+              <Textarea
+                id="segment-description"
+                placeholder="구간에 대한 설명을 입력하세요"
+                value={newSegment.description}
+                onChange={(e) => setNewSegment((prev) => ({ ...prev, description: e.target.value }))}
+                rows={3}
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">

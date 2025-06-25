@@ -1,4 +1,4 @@
-import { type NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse } from 'next/server';
 
 interface YouTubeSearchResult {
   id: {
@@ -61,110 +61,113 @@ function formatViewCount(viewCount: string): string {
 
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url)
-    const query = searchParams.get("q")
-    const page = Number.parseInt(searchParams.get("page") || "1")
-    const maxResults = Number.parseInt(searchParams.get("maxResults") || "10")
-
-    if (!query) {
-      return NextResponse.json({ success: false, error: "Query parameter is required" }, { status: 400 })
+    const searchParams = request.nextUrl.searchParams;
+    const query = searchParams.get('q') || 'test';
+    
+    // API 키가 없는 경우 mock 데이터 반환 (개발용)
+    if (!process.env.NEXT_PUBLIC_YOUTUBE_API_KEY) {
+      console.log('YouTube API key not configured, returning mock data for development');
+      
+      // Mock 검색 결과 데이터
+      const mockResults = {
+        items: [
+          {
+            id: 'dQw4w9WgXcQ',
+            title: `테스트 비디오 - ${query}`,
+            description: '개발용 테스트 비디오입니다. YouTube API 키를 설정하면 실제 검색 결과가 표시됩니다.',
+            thumbnail: 'https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg',
+            channelId: 'UCuAXFkgsw1L7xaCfnd5JJOw',
+            channelTitle: '테스트 채널',
+            publishedAt: new Date().toISOString(),
+            duration: 'PT3M33S',
+            viewCount: '1000000',
+            likeCount: '10000',
+            tags: ['test', 'demo']
+          },
+          {
+            id: 'ScMzIvxBSi4',
+            title: `샘플 영상 - ${query}`,
+            description: 'YouTube API 연동을 위한 샘플 영상입니다.',
+            thumbnail: 'https://img.youtube.com/vi/ScMzIvxBSi4/maxresdefault.jpg',
+            channelId: 'UCuAXFkgsw1L7xaCfnd5JJOw',
+            channelTitle: '샘플 채널',
+            publishedAt: new Date(Date.now() - 86400000).toISOString(),
+            duration: 'PT5M20S',
+            viewCount: '500000',
+            likeCount: '5000',
+            tags: ['sample', 'youtube']
+          }
+        ],
+        pagination: {
+          page: 1,
+          pageSize: 2,
+          totalItems: 2,
+          totalPages: 1,
+          hasNext: false,
+          hasPrevious: false
+        }
+      };
+      
+      return NextResponse.json({
+        success: true,
+        data: mockResults,
+        apiKeyStatus: 'missing',
+        mockData: true
+      });
     }
-
-    const apiKey = process.env.YOUTUBE_API_KEY
-    if (!apiKey) {
-      return NextResponse.json({ success: false, error: "YouTube API key not configured" }, { status: 500 })
+    
+    // 실제 YouTube API 사용 (서버에서 직접 호출)
+    const response = await fetch(`https://www.googleapis.com/youtube/v3/search?` + 
+      `part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=20&key=${process.env.NEXT_PUBLIC_YOUTUBE_API_KEY}`
+    );
+    
+    if (!response.ok) {
+      throw new Error(`YouTube API error: ${response.status}`);
     }
-
-    // 페이지네이션을 위한 pageToken 계산 (간단한 구현)
-    const startIndex = (page - 1) * maxResults
-
-    // YouTube Data API로 검색
-    const searchResponse = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(query)}&maxResults=${maxResults}&order=relevance&key=${apiKey}`,
-    )
-
-    if (!searchResponse.ok) {
-      throw new Error(`YouTube API error: ${searchResponse.status}`)
-    }
-
-    const searchData = await searchResponse.json()
-    const videoIds = searchData.items.map((item: YouTubeSearchResult) => item.id.videoId).join(",")
-
-    // 비디오 상세 정보 (재생시간, 조회수, 설명 포함) 가져오기
-    const detailsResponse = await fetch(
-      `https://www.googleapis.com/youtube/v3/videos?part=contentDetails,statistics,snippet&id=${videoIds}&key=${apiKey}`,
-    )
-
-    if (!detailsResponse.ok) {
-      throw new Error(`YouTube API error: ${detailsResponse.status}`)
-    }
-
-    const detailsData = await detailsResponse.json()
-    const videoDetails = new Map<string, YouTubeVideoDetails>()
-
-    detailsData.items.forEach((item: YouTubeVideoDetails) => {
-      videoDetails.set(item.id, item)
-    })
-
-    // 결과 포맷팅
-    const results = searchData.items.map((item: YouTubeSearchResult) => {
-      const details = videoDetails.get(item.id.videoId)
-      return {
+    
+    const data = await response.json();
+    
+    // 응답 데이터를 우리 형식으로 변환
+    const searchResult = {
+      items: data.items.map((item: any) => ({
         id: item.id.videoId,
         title: item.snippet.title,
-        thumbnail: item.snippet.thumbnails.high?.url || item.snippet.thumbnails.medium.url,
-        duration: details ? parseDuration(details.contentDetails.duration) : "알 수 없음",
+        description: item.snippet.description,
+        thumbnail: item.snippet.thumbnails.medium?.url || item.snippet.thumbnails.default?.url,
+        channelId: item.snippet.channelId,
         channelTitle: item.snippet.channelTitle,
         publishedAt: item.snippet.publishedAt,
-        description: item.snippet.description.substring(0, 150) + (item.snippet.description.length > 150 ? "..." : ""),
-        viewCount: details?.statistics?.viewCount ? formatViewCount(details.statistics.viewCount) : undefined,
+        duration: 'PT0S', // 검색 API에서는 duration이 포함되지 않음
+        viewCount: '0',
+        likeCount: '0',
+        tags: []
+      })),
+      pagination: {
+        page: 1,
+        pageSize: data.items.length,
+        totalItems: data.pageInfo?.totalResults || data.items.length,
+        totalPages: 1,
+        hasNext: !!data.nextPageToken,
+        hasPrevious: false
       }
-    })
-
+    };
+    
     return NextResponse.json({
       success: true,
-      results,
-      page,
-      hasMore: results.length === maxResults,
-    })
+      data: searchResult,
+      apiKeyStatus: 'configured'
+    });
+    
   } catch (error) {
-    console.error("YouTube search error:", error)
-
-    // API 오류 시 fallback으로 mock 데이터 사용
-    const mockResults = [
-      {
-        id: "dQw4w9WgXcQ",
-        title: "Rick Astley - Never Gonna Give You Up (Official Video)",
-        thumbnail: "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
-        duration: "3:33",
-        channelTitle: "Rick Astley",
-        publishedAt: "2009-10-25T06:57:33Z",
-        description: "The official video for Rick Astley's 'Never Gonna Give You Up'...",
-        viewCount: "1.4B",
+    console.error('YouTube search API error:', error);
+    
+    return NextResponse.json(
+      { 
+        error: 'YouTube search failed',
+        details: error instanceof Error ? error.message : 'Unknown error',
+        apiKeyStatus: process.env.NEXT_PUBLIC_YOUTUBE_API_KEY ? 'configured' : 'missing'
       },
-      {
-        id: "kJQP7kiw5Fk",
-        title: "Despacito",
-        thumbnail: "https://i.ytimg.com/vi/kJQP7kiw5Fk/mqdefault.jpg",
-        duration: "4:42",
-        channelTitle: "Luis Fonsi",
-        publishedAt: "2017-01-12T19:30:00Z",
-        description: "Despacito by Luis Fonsi featuring Daddy Yankee...",
-        viewCount: "8.2B",
-      },
-    ]
-
-    const query = new URL(request.url).searchParams.get("q")?.toLowerCase() || ""
-    const filteredResults = mockResults.filter(
-      (video) => video.title.toLowerCase().includes(query) || video.channelTitle.toLowerCase().includes(query),
-    )
-
-    return NextResponse.json({
-      success: true,
-      results: filteredResults,
-      fallback: true, // API 오류로 인한 fallback임을 표시
-      page: 1,
-      hasMore: false,
-    })
+      { status: 500 }
+    );
   }
 }
